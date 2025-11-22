@@ -193,7 +193,7 @@ export default function LandingPage() {
       </main>
 
       <footer className="p-6 text-center text-zinc-600 text-xs">
-        <p>&copy; 2024 Onyx Editor. All rights reserved locally.</p>
+        <p>&copy; 2025 Onyx Editor. All rights reserved locally. Made By Naman!</p>
       </footer>
     </div>
   );
