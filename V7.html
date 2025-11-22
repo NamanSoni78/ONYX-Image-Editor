@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#000000">
+    <title>Onyx Ultimate V7</title>
+    
+    <!-- REACT & BABEL -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- STYLING -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- ENGINES -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+
+    <!-- FONTS -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Roboto+Slab&family=Pacifico&family=Bebas+Neue&family=Dancing+Script&family=Permanent+Marker&display=swap" rel="stylesheet">
+
+    <style>
+        :root { --app-height: 100dvh; --safe-bottom: env(safe-area-inset-bottom, 20px); }
+        body {
+            background-color: #050505; color: #fff; font-family: 'Inter', sans-serif;
+            overflow: hidden; touch-action: none; height: var(--app-height); width: 100vw;
+            user-select: none; -webkit-tap-highlight-color: transparent;
+        }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        .glass { background: rgba(18, 18, 18, 0.95); backdrop-filter: blur(16px); border-top: 1px solid rgba(255, 255, 255, 0.1); }
+        .canvas-bg {
+            background-image: linear-gradient(45deg, #151515 25%, transparent 25%), linear-gradient(-45deg, #151515 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #151515 75%), linear-gradient(-45deg, transparent 75%, #151515 75%);
+            background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+        input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #3b82f6; border: 2px solid #fff; margin-top: -8px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: #333; border-radius: 2px; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .animate-enter { animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .cropper-modal { background-color: #000; opacity: 0.85; }
+    </style>
+</head>
+<body>
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // --- CONSTANTS ---
+        const FONTS = ['Inter', 'Roboto Slab', 'Pacifico', 'Bebas Neue', 'Dancing Script', 'Permanent Marker'];
+        const COLORS = ['#ffffff', '#000000', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b'];
+        const FILTERS = [
+            { name: 'None', fn: null },
+            { name: 'Gray', fn: new fabric.Image.filters.Grayscale() },
+            { name: 'Sepia', fn: new fabric.Image.filters.Sepia() },
+            { name: 'Vintage', fn: new fabric.Image.filters.Vintage() },
+            { name: 'Kodak', fn: new fabric.Image.filters.Kodachrome() },
+            { name: 'Techni', fn: new fabric.Image.filters.Technicolor() },
+            { name: 'Polaroid', fn: new fabric.Image.filters.Polaroid() },
+            { name: 'Invert', fn: new fabric.Image.filters.Invert() }
+        ];
+        const STICKERS = ["🔥", "💯", "❤️", "😍", "😂", "👑", "✨", "🚀", "💀", "👀", "🎉", "💸", "🍕", "🌈", "🕶️", "💡", "📸", "🏝️"];
+
+        // --- ICONS ---
+        const ICONS = {
+            back: "fa-chevron-left", undo: "fa-rotate-left", redo: "fa-rotate-right",
+            export: "fa-download", add: "fa-plus", layers: "fa-layer-group",
+            text: "fa-font", shapes: "fa-shapes", draw: "fa-paintbrush",
+            bg: "fa-image", filter: "fa-wand-magic-sparkles", adjust: "fa-sliders",
+            crop: "fa-crop-simple", style: "fa-palette", delete: "fa-trash-can",
+            check: "fa-check", close: "fa-xmark", chroma: "fa-users-viewfinder",
+            sticker: "fa-face-smile", collage: "fa-table-cells"
+        };
+
+        // --- APP ---
+        const App = () => {
+            // REFS
+            const canvasRef = useRef(null);
+            const containerRef = useRef(null);
+            const fileInput = useRef(null);
+            const bgInput = useRef(null);
+            const cropperImgRef = useRef(null);
+            const cropperInstance = useRef(null);
+            
+            // HISTORY REFS
+            const historyRef = useRef([]);
+            const historyStepRef = useRef(-1);
+            const isLocked = useRef(false);
+
+            // GESTURE REFS
+            const gestureState = useRef({ scale: 1, dist: 0, angle: 0, startScale: 1, startAngle: 0 });
+
+            // STATE
+            const [activeObj, setActiveObj] = useState(null);
+            const [menu, setMenu] = useState('HOME'); 
+            const [subTool, setSubTool] = useState(null);
+            const [canUndo, setCanUndo] = useState(false);
+            const [canRedo, setCanRedo] = useState(false);
+            const [cropData, setCropData] = useState(null);
+            const [exportConfig, setExportConfig] = useState({ width: 1080, height: 1080, format: 'png', quality: 1, ratio: true });
+            const [layers, setLayers] = useState([]);
+
+            // UI VALUES
+            const [val, setVal] = useState({
+                opacity: 1, brightness: 0, contrast: 0, saturation: 0, blur: 0, chroma: 0,
+                strokeW: 0, strokeC: '#fff', fill: '#fff', bg: 'transparent', font: 'Inter',
+                shadowB: 0, shadowO: 10, shadowC: '#000000', radius: 0, brushS: 5, brushC: '#ef4444'
+            });
+
+            // --- INIT ---
+            useEffect(() => {
+                const c = new fabric.Canvas(containerRef.current, {
+                    backgroundColor: '#111', 
+                    preserveObjectStacking: true, 
+                    selection: false, 
+                    controlsAboveOverlay: true,
+                    allowTouchScrolling: false,
+                });
+
+                fabric.Object.prototype.set({
+                    transparentCorners: false, cornerColor: '#fff', cornerStrokeColor: '#3b82f6',
+                    borderColor: '#3b82f6', cornerSize: 24, touchCornerSize: 30,
+                    padding: 10, cornerStyle: 'circle', borderScaleFactor: 2,
+                    centeredScaling: true, centeredRotation: true
+                });
+
+                // LISTENERS
+                c.on('object:modified', () => saveHistory(c));
+                c.on('object:added', () => { saveHistory(c); updateLayers(c); });
+                c.on('object:removed', () => { saveHistory(c); updateLayers(c); });
+                
+                // SELECTION & SYNC
+                c.on('selection:created', (e) => handleSelect(e.selected[0]));
+                c.on('selection:updated', (e) => handleSelect(e.selected[0]));
+                c.on('selection:cleared', () => { setActiveObj(null); setMenu('HOME'); });
+
+                // --- TWO FINGER GESTURES (MANUAL IMPLEMENTATION) ---
+                const getDist = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+                const getAngle = (t1, t2) => Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
+
+                const touchStart = (e) => {
+                    if (e.touches.length === 2) {
+                        const obj = c.getActiveObject();
+                        if(obj) {
+                            gestureState.current.dist = getDist(e.touches[0], e.touches[1]);
+                            gestureState.current.angle = getAngle(e.touches[0], e.touches[1]);
+                            gestureState.current.startScale = obj.scaleX;
+                            gestureState.current.startAngle = obj.angle;
+                        }
+                    }
+                };
+
+                const touchMove = (e) => {
+                    if (e.touches.length === 2) {
+                        const obj = c.getActiveObject();
+                        if(obj) {
+                            e.preventDefault(); // Prevent page scroll
+                            const dist = getDist(e.touches[0], e.touches[1]);
+                            const angle = getAngle(e.touches[0], e.touches[1]);
+                            
+                            // Scale
+                            const scaleFactor = dist / gestureState.current.dist;
+                            obj.scale(gestureState.current.startScale * scaleFactor);
+                            
+                            // Rotate
+                            const deltaRotation = angle - gestureState.current.angle;
+                            obj.rotate(gestureState.current.startAngle + deltaRotation);
+                            
+                            c.requestRenderAll();
+                        }
+                    }
+                };
+                
+                // Attach native listeners to canvas wrapper for gestures
+                const wrap = document.getElementById('canvas-wrapper');
+                wrap.addEventListener('touchstart', touchStart, {passive: false});
+                wrap.addEventListener('touchmove', touchMove, {passive: false});
+
+                // RESIZE
+                const resize = () => {
+                    if(wrap) { c.setWidth(wrap.offsetWidth); c.setHeight(wrap.offsetHeight); c.renderAll(); }
+                };
+                window.addEventListener('resize', resize);
+                resize();
+
+                canvasRef.current = c;
+                saveHistory(c);
+
+                return () => { 
+                    window.removeEventListener('resize', resize); 
+                    wrap.removeEventListener('touchstart', touchStart);
+                    wrap.removeEventListener('touchmove', touchMove);
+                    c.dispose(); 
+                }
+            }, []);
+
+            // --- HISTORY ---
+            const saveHistory = (c) => {
+                if (isLocked.current) return;
+                const json = JSON.stringify(c.toJSON(['selectable', 'name', 'id', 'filters', 'shadow']));
+                if (historyStepRef.current < historyRef.current.length - 1) {
+                    historyRef.current = historyRef.current.slice(0, historyStepRef.current + 1);
+                }
+                historyRef.current.push(json);
+                historyStepRef.current = historyRef.current.length - 1;
+                if(historyRef.current.length > 15) {
+                    historyRef.current.shift();
+                    historyStepRef.current--;
+                }
+                updateUndoRedoState();
+            };
+
+            const updateUndoRedoState = () => {
+                setCanUndo(historyStepRef.current > 0);
+                setCanRedo(historyStepRef.current < historyRef.current.length - 1);
+            };
+
+            const undo = () => {
+                if (historyStepRef.current > 0) {
+                    isLocked.current = true;
+                    historyStepRef.current--;
+                    canvasRef.current.loadFromJSON(historyRef.current[historyStepRef.current], () => {
+                        canvasRef.current.renderAll();
+                        updateLayers(canvasRef.current);
+                        isLocked.current = false;
+                        updateUndoRedoState();
+                    });
+                }
+            };
+
+            const redo = () => {
+                if (historyStepRef.current < historyRef.current.length - 1) {
+                    isLocked.current = true;
+                    historyStepRef.current++;
+                    canvasRef.current.loadFromJSON(historyRef.current[historyStepRef.current], () => {
+                        canvasRef.current.renderAll();
+                        updateLayers(canvasRef.current);
+                        isLocked.current = false;
+                        updateUndoRedoState();
+                    });
+                }
+            };
+
+            // --- STATE SYNCING (FIXED FOR TEXT) ---
+            const handleSelect = (obj) => {
+                if (!obj) return;
+                setActiveObj(obj);
+                
+                // Extract Shadow Props safely
+                let sBlur = 0, sOff = 10, sCol = '#000000';
+                if(obj.shadow) {
+                    sBlur = obj.shadow.blur || 0;
+                    sOff = obj.shadow.offsetX || 10;
+                    sCol = obj.shadow.color || '#000000';
+                }
+
+                setVal({
+                    opacity: obj.opacity || 1,
+                    strokeW: obj.strokeWidth || 0,
+                    strokeC: obj.stroke || '#fff',
+                    fill: obj.fill || '#fff',
+                    bg: obj.backgroundColor || 'transparent',
+                    font: obj.fontFamily || 'Inter',
+                    shadowB: sBlur,
+                    shadowO: sOff,
+                    shadowC: sCol,
+                    radius: obj.rx || 0,
+                    brushS: val.brushS,
+                    brushC: val.brushC,
+                    brightness: 0, contrast: 0, saturation: 0, blur: 0, chroma: 0
+                });
+            };
+
+            const updateLayers = (c) => setLayers(c.getObjects().slice().reverse());
+
+            // --- TOOLS ---
+            const addImage = (e) => {
+                if(!e.target.files[0]) return;
+                const reader = new FileReader();
+                reader.onload = (f) => {
+                    fabric.Image.fromURL(f.target.result, (img) => {
+                        img.scaleToWidth(canvasRef.current.width * 0.6);
+                        canvasRef.current.add(img);
+                        canvasRef.current.centerObject(img);
+                        canvasRef.current.setActiveObject(img);
+                        saveHistory(canvasRef.current);
+                    });
+                };
+                reader.readAsDataURL(e.target.files[0]);
+                e.target.value = null;
+            };
+
+            const setBackground = (e) => {
+                if(!e.target.files[0]) return;
+                const reader = new FileReader();
+                reader.onload = (f) => {
+                    fabric.Image.fromURL(f.target.result, (img) => {
+                        const ratio = Math.max(canvasRef.current.width / img.width, canvasRef.current.height / img.height);
+                        img.scale(ratio);
+                        img.set({ originX: 'center', originY: 'center' });
+                        canvasRef.current.setBackgroundImage(img, canvasRef.current.renderAll.bind(canvasRef.current), {
+                            left: canvasRef.current.width/2, top: canvasRef.current.height/2
+                        });
+                        saveHistory(canvasRef.current);
+                    });
+                };
+                reader.readAsDataURL(e.target.files[0]);
+                e.target.value = null;
+            };
+
+            const addText = () => {
+                const t = new fabric.IText('Tap to Edit', { left: canvasRef.current.width/2, top: canvasRef.current.height/2, fontFamily: 'Inter', fill: '#fff', fontSize: 40, originX: 'center', originY: 'center' });
+                canvasRef.current.add(t);
+                canvasRef.current.setActiveObject(t);
+                saveHistory(canvasRef.current);
+                setMenu('TEXT');
+            };
+
+            const addShape = (type) => {
+                let s;
+                const opts = { left: canvasRef.current.width/2, top: canvasRef.current.height/2, fill: '#3b82f6', originX: 'center', originY: 'center' };
+                if(type === 'rect') s = new fabric.Rect({ width: 150, height: 150, ...opts });
+                if(type === 'circle') s = new fabric.Circle({ radius: 80, ...opts });
+                if(type === 'tri') s = new fabric.Triangle({ width: 150, height: 150, ...opts });
+                canvasRef.current.add(s);
+                canvasRef.current.setActiveObject(s);
+                saveHistory(canvasRef.current);
+                setMenu('HOME');
+            };
+
+            const toggleDraw = () => {
+                const c = canvasRef.current;
+                c.isDrawingMode = !c.isDrawingMode;
+                if(c.isDrawingMode) {
+                    c.freeDrawingBrush = new fabric.PencilBrush(c);
+                    c.freeDrawingBrush.width = val.brushS;
+                    c.freeDrawingBrush.color = val.brushC;
+                    setMenu('DRAW');
+                    setActiveObj(null);
+                } else setMenu('HOME');
+            };
+
+            // --- LIVE STYLE UPDATES ---
+            const updateStyle = (key, v) => {
+                const obj = canvasRef.current.getActiveObject(); // Always get fresh object
+                if(!obj) return;
+                
+                setVal(p => ({...p, [key]: v})); // Update UI State
+
+                // Apply to Fabric Object
+                if(key === 'fill') obj.set('fill', v);
+                if(key === 'strokeC') obj.set('stroke', v);
+                if(key === 'strokeW') obj.set('strokeWidth', parseInt(v));
+                if(key === 'bg') obj.set('backgroundColor', v);
+                if(key === 'font') obj.set('fontFamily', v);
+                if(key === 'opacity') obj.set('opacity', parseFloat(v));
+                
+                // PROPER SHADOW IMPLEMENTATION
+                if(key === 'shadowB' || key === 'shadowO' || key === 'shadowC') {
+                    const currentShadow = obj.shadow || { blur: 0, offsetX: 10, offsetY: 10, color: '#000000' };
+                    
+                    let newBlur = key === 'shadowB' ? parseInt(v) : (currentShadow.blur || 0);
+                    let newOff = key === 'shadowO' ? parseInt(v) : (currentShadow.offsetX || 10);
+                    let newCol = key === 'shadowC' ? v : (currentShadow.color || '#000000');
+
+                    obj.set('shadow', new fabric.Shadow({
+                        color: newCol,
+                        blur: newBlur,
+                        offsetX: newOff,
+                        offsetY: newOff
+                    }));
+                }
+
+                if(key === 'radius' && obj.type === 'rect') obj.set({ rx: parseInt(v), ry: parseInt(v) });
+                
+                canvasRef.current.requestRenderAll();
+            };
+
+            const applyFilter = (filterObj) => {
+                if(!activeObj || activeObj.type !== 'image') return;
+                activeObj.filters = []; 
+                if(filterObj.fn) activeObj.filters.push(filterObj.fn);
+                activeObj.applyFilters();
+                canvasRef.current.requestRenderAll();
+                saveHistory(canvasRef.current);
+            };
+
+            const adjustImg = (type, value) => {
+                if(!activeObj || activeObj.type !== 'image') return;
+                setVal(prev => ({...prev, [type]: value}));
+                
+                const map = {
+                    'brightness': new fabric.Image.filters.Brightness({ brightness: parseFloat(value) }),
+                    'contrast': new fabric.Image.filters.Contrast({ contrast: parseFloat(value) }),
+                    'saturation': new fabric.Image.filters.Saturation({ saturation: parseFloat(value) }),
+                    'blur': new fabric.Image.filters.Blur({ blur: parseFloat(value) }),
+                    'chroma': new fabric.Image.filters.RemoveColor({ distance: parseFloat(value), color: '#00FF00' })
+                };
+
+                activeObj.filters = activeObj.filters.filter(f => f.type !== map[type].type);
+                if(parseFloat(value) !== 0) activeObj.filters.push(map[type]);
+                activeObj.applyFilters();
+                canvasRef.current.requestRenderAll();
+            };
+
+            // --- CROP ---
+            const startCrop = () => {
+                if(!activeObj || activeObj.type !== 'image') return;
+                setCropData({ src: activeObj.toDataURL(), visible: true });
+                setTimeout(() => {
+                    cropperInstance.current = new Cropper(cropperImgRef.current, { viewMode: 1, background: false });
+                }, 100);
+            };
+
+            const finishCrop = () => {
+                if(!cropperInstance.current) return;
+                const cropped = cropperInstance.current.getCroppedCanvas().toDataURL();
+                activeObj.setSrc(cropped, () => {
+                    canvasRef.current.renderAll();
+                    cropperInstance.current.destroy();
+                    setCropData(null);
+                    saveHistory(canvasRef.current);
+                });
+            };
+
+            const handleExport = () => {
+                canvasRef.current.discardActiveObject();
+                canvasRef.current.renderAll();
+                const mult = exportConfig.width / canvasRef.current.width;
+                const data = canvasRef.current.toDataURL({ format: exportConfig.format, quality: exportConfig.quality, multiplier: mult });
+                const link = document.createElement('a');
+                link.download = `onyx_edit.${exportConfig.format}`;
+                link.href = data;
+                link.click();
+                setMenu('HOME');
+            };
+
+            // --- COMPONENTS ---
+            const IconBtn = ({ icon, label, onClick, active, color }) => (
+                <button onClick={onClick} className={`flex flex-col items-center justify-center min-w-[64px] active:scale-90 transition-transform ${active?'text-blue-400':'text-zinc-400'}`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg mb-1 ${active?'bg-blue-500/20':'bg-zinc-800/50'}`}>
+                        <i className={`fa-solid ${icon}`} style={{color: color}}></i>
+                    </div>
+                    <span className="text-[9px] font-bold tracking-wide uppercase">{label}</span>
+                </button>
+            );
+
+            const Slider = ({ label, val, min, max, step, onChange }) => (
+                <div className="mb-3 px-1">
+                    <div className="flex justify-between text-[10px] text-zinc-400 font-bold mb-1 uppercase"><span>{label}</span><span>{Math.round(val*100)/100}</span></div>
+                    <input type="range" min={min} max={max} step={step} value={val} onChange={e => onChange(e.target.value)} />
+                </div>
+            );
+
+            const ColorPick = ({ sel, change }) => (
+                <div className="flex gap-2 overflow-x-auto hide-scroll py-2">
+                    <div className="w-8 h-8 rounded-full border border-white/20 relative overflow-hidden flex-shrink-0"><input type="color" className="opacity-0 w-full h-full scale-150" onChange={e=>change(e.target.value)} /><i className="fa-solid fa-eye-dropper absolute inset-0 m-auto pointer-events-none flex items-center justify-center text-xs"></i></div>
+                    <div onClick={()=>change('transparent')} className="w-8 h-8 rounded-full border border-white/20 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')] flex-shrink-0"></div>
+                    {COLORS.map(c => <div key={c} onClick={()=>change(c)} className={`w-8 h-8 rounded-full flex-shrink-0 border-2 ${sel===c?'border-blue-500':'border-transparent'}`} style={{backgroundColor: c}}></div>)}
+                </div>
+            );
+
+            // --- RENDER ---
+            return (
+                <div className="flex flex-col h-full bg-black relative">
+                    
+                    {/* CROP MODAL */}
+                    {cropData && (
+                        <div className="absolute inset-0 z-50 bg-black flex flex-col">
+                            <div className="flex-1 p-4 relative"><img ref={cropperImgRef} src={cropData.src} className="max-w-full max-h-full" /></div>
+                            <div className="h-16 bg-zinc-900 flex justify-between items-center px-6 border-t border-zinc-800">
+                                <button onClick={()=>{setCropData(null); cropperInstance.current.destroy();}} className="text-red-500 font-bold">Cancel</button>
+                                <button onClick={finishCrop} className="text-blue-500 font-bold">Apply Crop</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* TOP BAR */}
+                    <div className="h-14 flex justify-between items-center px-4 bg-zinc-900 border-b border-zinc-800 z-20">
+                        <div className="flex gap-4">
+                            <button onClick={undo} className={`text-xl ${canUndo?'text-white':'text-zinc-700'}`} disabled={!canUndo}><i className={`fa-solid ${ICONS.undo}`}></i></button>
+                            <button onClick={redo} className={`text-xl ${canRedo?'text-white':'text-zinc-700'}`} disabled={!canRedo}><i className={`fa-solid ${ICONS.redo}`}></i></button>
+                        </div>
+                        <span className="font-black text-sm tracking-widest bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">ONYX Image Editor</span>
+                        <button onClick={() => setMenu('EXPORT')} className="bg-white text-black px-4 py-1.5 rounded-full text-xs font-bold"><i className={`fa-solid ${ICONS.export} mr-1`}></i> Save</button>
+                    </div>
+
+                    {/* CANVAS */}
+                    <div id="canvas-wrapper" className="flex-1 relative overflow-hidden canvas-bg flex items-center justify-center">
+                        <canvas ref={containerRef} />
+                    </div>
+
+                    {/* LAYERS PANEL */}
+                    {menu === 'LAYERS' && (
+                        <div className="absolute bottom-0 w-full h-1/2 bg-zinc-900 rounded-t-2xl z-40 animate-enter shadow-2xl flex flex-col">
+                            <div className="flex justify-between p-4 border-b border-zinc-800"><span className="font-bold">Layers</span><button onClick={()=>setMenu('HOME')}><i className={`fa-solid ${ICONS.close}`}></i></button></div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                                {layers.map((obj, i) => (
+                                    <div key={i} onClick={()=>{canvasRef.current.setActiveObject(obj); canvasRef.current.renderAll();}} className={`flex items-center gap-3 p-3 bg-zinc-800 rounded border ${activeObj===obj?'border-blue-500':'border-transparent'}`}>
+                                        <div className="w-8 h-8 bg-black rounded flex items-center justify-center text-xs text-zinc-500"><i className={`fa-solid ${obj.type==='image'?'fa-image':obj.type==='i-text'?ICONS.text:'fa-shapes'}`}></i></div>
+                                        <span className="flex-1 text-xs truncate text-zinc-300">{obj.type} {layers.length-i}</span>
+                                        <button onClick={(e)=>{e.stopPropagation(); obj.bringForward(); updateLayers(canvasRef.current); saveHistory(canvasRef.current);}}><i className="fa-solid fa-arrow-up p-2 text-zinc-500"></i></button>
+                                        <button onClick={(e)=>{e.stopPropagation(); obj.sendBackwards(); updateLayers(canvasRef.current); saveHistory(canvasRef.current);}}><i className="fa-solid fa-arrow-down p-2 text-zinc-500"></i></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* EXPORT PANEL */}
+                    {menu === 'EXPORT' && (
+                        <div className="absolute bottom-0 w-full bg-zinc-900 rounded-t-2xl z-40 animate-enter shadow-2xl p-4">
+                            <div className="flex justify-between mb-4"><span className="font-bold">Export Settings</span><button onClick={()=>setMenu('HOME')}><i className={`fa-solid ${ICONS.close}`}></i></button></div>
+                            <div className="space-y-4">
+                                <div className="flex gap-2">
+                                    <button onClick={()=>setExportConfig({...exportConfig, format:'png'})} className={`flex-1 py-2 rounded font-bold text-xs ${exportConfig.format==='png'?'bg-blue-600':'bg-zinc-800'}`}>PNG</button>
+                                    <button onClick={()=>setExportConfig({...exportConfig, format:'jpeg'})} className={`flex-1 py-2 rounded font-bold text-xs ${exportConfig.format==='jpeg'?'bg-blue-600':'bg-zinc-800'}`}>JPG</button>
+                                </div>
+                                <button onClick={handleExport} className="w-full bg-white text-black py-3 rounded-xl font-bold text-sm mt-2">Download Image</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* BOTTOM TOOLBAR */}
+                    <div className="glass w-full z-30 pb-[calc(var(--safe-bottom)+5px)] transition-all">
+                        
+                        {/* SUB-MENUS */}
+                        <div className="border-b border-white/5 min-h-[10px]">
+                            
+                            {/* BACKGROUND SETTINGS */}
+                            {menu === 'BG' && (
+                                <div className="p-4 animate-enter">
+                                    <p className="text-xs font-bold text-zinc-500 mb-2">SOLID COLOR</p>
+                                    <ColorPick sel={canvasRef.current?.backgroundColor} change={(c)=>{ canvasRef.current.setBackgroundColor(c, ()=>canvasRef.current.renderAll()); saveHistory(canvasRef.current); }} />
+                                    <p className="text-xs font-bold text-zinc-500 mt-4 mb-2">IMAGE BACKGROUND</p>
+                                    <input type="file" accept="image/*" ref={bgInput} className="hidden" onChange={setBackground} />
+                                    <button onClick={()=>bgInput.current.click()} className="w-full py-2 bg-zinc-800 rounded text-xs font-bold"><i className={`fa-solid ${ICONS.add} mr-2`}></i> Upload Image</button>
+                                </div>
+                            )}
+
+                            {/* SHAPES */}
+                            {menu === 'SHAPE' && (
+                                <div className="flex justify-around p-4 animate-enter">
+                                    <button onClick={()=>addShape('rect')} className="w-16 h-16 bg-zinc-800 rounded flex items-center justify-center"><i className="fa-solid fa-square text-2xl"></i></button>
+                                    <button onClick={()=>addShape('circle')} className="w-16 h-16 bg-zinc-800 rounded flex items-center justify-center"><i className="fa-solid fa-circle text-2xl"></i></button>
+                                    <button onClick={()=>addShape('tri')} className="w-16 h-16 bg-zinc-800 rounded flex items-center justify-center"><i className="fa-solid fa-play text-2xl -rotate-90"></i></button>
+                                </div>
+                            )}
+
+                            {/* DRAW */}
+                            {menu === 'DRAW' && (
+                                <div className="p-4 animate-enter">
+                                    <Slider label="Brush Size" val={val.brushS} min={1} max={50} step={1} onChange={v=>{updateStyle('brushS', v); canvasRef.current.freeDrawingBrush.width=parseInt(v);}} />
+                                    <ColorPick sel={val.brushC} change={c=>{updateStyle('brushC', c); canvasRef.current.freeDrawingBrush.color=c;}} />
+                                </div>
+                            )}
+
+                            {/* TEXT */}
+                            {menu === 'TEXT' && (
+                                <div className="p-4 animate-enter space-y-2">
+                                    <div className="flex gap-2 overflow-x-auto hide-scroll pb-1">
+                                        {FONTS.map(f=><button key={f} onClick={()=>updateStyle('font', f)} className={`px-3 py-1 rounded bg-zinc-800 text-xs whitespace-nowrap ${val.font===f?'text-blue-400 border border-blue-500':''}`} style={{fontFamily: f}}>{f}</button>)}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div><span className="text-[10px] font-bold text-zinc-500">FILL</span><ColorPick sel={val.fill} change={c=>updateStyle('fill', c)} /></div>
+                                        <div><span className="text-[10px] font-bold text-zinc-500">BG</span><ColorPick sel={val.bg} change={c=>updateStyle('bg', c)} /></div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ADJUST */}
+                            {menu === 'ADJUST' && (
+                                <div className="p-4 animate-enter">
+                                    <Slider label="Brightness" val={val.brightness} min={-1} max={1} step={0.05} onChange={v=>adjustImg('brightness', v)} />
+                                    <Slider label="Contrast" val={val.contrast} min={-1} max={1} step={0.05} onChange={v=>adjustImg('contrast', v)} />
+                                    <Slider label="Saturation" val={val.saturation} min={-1} max={1} step={0.05} onChange={v=>adjustImg('saturation', v)} />
+                                    <Slider label="Green Screen" val={val.chroma} min={0} max={1} step={0.05} onChange={v=>adjustImg('chroma', v)} />
+                                </div>
+                            )}
+
+                            {/* FILTER */}
+                            {menu === 'FILTER' && (
+                                <div className="flex gap-3 p-4 animate-enter overflow-x-auto hide-scroll">
+                                    {FILTERS.map((f, i) => (
+                                        <button key={i} onClick={()=>applyFilter(f)} className="flex flex-col items-center gap-1 flex-shrink-0">
+                                            <div className="w-14 h-14 bg-zinc-800 rounded border border-zinc-700 overflow-hidden"><div className={`w-full h-full bg-gradient-to-br from-orange-200 to-blue-500 filter-${f.name}`} style={{filter: f.name==='Gray'?'grayscale(1)':f.name==='Sepia'?'sepia(1)':''}}></div></div>
+                                            <span className="text-[9px] font-bold uppercase">{f.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* STICKERS */}
+                            {menu === 'STICKER' && (
+                                <div className="grid grid-cols-6 gap-4 p-4 h-32 overflow-y-auto animate-enter">
+                                    {STICKERS.map(s=><button key={s} onClick={()=>{ const t=new fabric.Text(s, {fontSize:80, left:canvasRef.current.width/2, top:canvasRef.current.height/2}); canvasRef.current.add(t); canvasRef.current.setActiveObject(t); saveHistory(canvasRef.current); }} className="text-2xl">{s}</button>)}
+                                </div>
+                            )}
+
+                            {/* STYLE */}
+                            {menu === 'STYLE' && (
+                                <div className="p-4 animate-enter">
+                                    <div className="flex gap-4 mb-4 border-b border-white/10 pb-2">
+                                        <button onClick={()=>setSubTool('border')} className={`text-xs font-bold ${subTool==='border'?'text-blue-400':'text-zinc-500'}`}>BORDER</button>
+                                        <button onClick={()=>setSubTool('shadow')} className={`text-xs font-bold ${subTool==='shadow'?'text-blue-400':'text-zinc-500'}`}>SHADOW</button>
+                                        <button onClick={()=>setSubTool('opacity')} className={`text-xs font-bold ${subTool==='opacity'?'text-blue-400':'text-zinc-500'}`}>OPACITY</button>
+                                        {activeObj?.type==='rect' && <button onClick={()=>setSubTool('radius')} className={`text-xs font-bold ${subTool==='radius'?'text-blue-400':'text-zinc-500'}`}>RADIUS</button>}
+                                    </div>
+                                    {subTool === 'border' && <><Slider label="Width" val={val.strokeW} min={0} max={20} step={1} onChange={v=>updateStyle('strokeW', v)} /><ColorPick sel={val.strokeC} change={c=>updateStyle('strokeC', c)} /></>}
+                                    {subTool === 'shadow' && <>
+                                        <Slider label="Blur" val={val.shadowB} min={0} max={50} step={1} onChange={v=>updateStyle('shadowB', v)} />
+                                        <Slider label="Offset" val={val.shadowO} min={0} max={50} step={1} onChange={v=>updateStyle('shadowO', v)} />
+                                        <div className="text-[10px] font-bold text-zinc-500 mb-1">COLOR</div>
+                                        <ColorPick sel={val.shadowC} change={c=>updateStyle('shadowC', c)} />
+                                    </>}
+                                    {subTool === 'opacity' && <Slider label="Opacity" val={val.opacity} min={0} max={1} step={0.05} onChange={v=>updateStyle('opacity', v)} />}
+                                    {subTool === 'radius' && <Slider label="Corner Radius" val={val.radius} min={0} max={100} onChange={v=>updateStyle('radius', v)} />}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* MAIN ICONS ROW */}
+                        <div className="flex items-center px-2 py-2 gap-1 overflow-x-auto hide-scroll">
+                            <input type="file" accept="image/*" ref={fileInput} className="hidden" onChange={addImage} />
+                            
+                            {menu !== 'HOME' ? (
+                                <IconBtn icon={ICONS.back} label="Done" onClick={()=>{setMenu('HOME'); setSubTool(null);}} />
+                            ) : (
+                                <>
+                                    <IconBtn icon={ICONS.add} label="Add Img" onClick={()=>fileInput.current.click()} />
+                                    <IconBtn icon={ICONS.bg} label="Backgnd" onClick={()=>setMenu('BG')} />
+                                    <IconBtn icon={ICONS.text} label="Text" onClick={addText} />
+                                    <IconBtn icon={ICONS.shapes} label="Shapes" onClick={()=>setMenu('SHAPE')} />
+                                    <IconBtn icon={ICONS.draw} label="Draw" onClick={toggleDraw} />
+                                    <IconBtn icon={ICONS.sticker} label="Sticker" onClick={()=>setMenu('STICKER')} />
+                                    <IconBtn icon={ICONS.layers} label="Layers" onClick={()=>{updateLayers(canvasRef.current); setMenu('LAYERS');}} />
+                                    
+                                    {activeObj && <div className="w-px h-8 bg-white/20 mx-2"></div>}
+
+                                    {activeObj?.type === 'image' && (
+                                        <>
+                                            <IconBtn icon={ICONS.crop} label="Crop" onClick={startCrop} />
+                                            <IconBtn icon={ICONS.adjust} label="Adjust" onClick={()=>setMenu('ADJUST')} />
+                                            <IconBtn icon={ICONS.filter} label="Filter" onClick={()=>setMenu('FILTER')} />
+                                        </>
+                                    )}
+                                    
+                                    {activeObj && (activeObj.type==='i-text' || activeObj.type==='text') && <IconBtn icon={ICONS.text} label="Edit Txt" onClick={()=>setMenu('TEXT')} />}
+                                    
+                                    {activeObj && (
+                                        <>
+                                            <IconBtn icon={ICONS.style} label="Style" onClick={()=>{setMenu('STYLE'); setSubTool('border');}} />
+                                            <IconBtn icon={ICONS.delete} label="Delete" color="#ef4444" onClick={()=>{canvasRef.current.remove(activeObj); saveHistory(canvasRef.current);}} />
+                                        </>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
