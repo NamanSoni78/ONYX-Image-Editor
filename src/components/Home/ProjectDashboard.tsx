@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { FaPlus, FaArrowRight, FaImage, FaTrash, FaPen, FaDownload, FaFileImport } from 'react-icons/fa6';
+import { FaPlus, FaImage, FaTrash, FaPen, FaDownload, FaFileImport, FaArrowRight } from 'react-icons/fa6';
 import { createProject, getAllProjects, deleteProject, renameProject, importProject, getProject } from '@/lib/storage';
 
 interface Project {
@@ -14,7 +13,7 @@ interface Project {
   lastModified: number;
 }
 
-export default function LandingPage() {
+export default function ProjectDashboard() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +25,6 @@ export default function LandingPage() {
 
   const loadProjects = async () => {
     const list = await getAllProjects();
-    // Sort by date desc
     setProjects(list.reverse());
     setLoading(false);
   };
@@ -87,24 +85,18 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="h-[100dvh] bg-black text-white flex flex-col font-sans overflow-y-auto pb-20">
-      {/* Hero Section */}
-      <header className="p-6 flex justify-between items-center border-b border-white/10 glass sticky top-0 z-20 shrink-0">
-        <h1 className="text-2xl font-black tracking-widest bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">ONYX IMAGE EDITOR</h1>
-      </header>
-
-      <main className="flex-1 p-6 max-w-4xl mx-auto w-full">
+    <div className="space-y-12">
         <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="text-center py-12 space-y-6"
         >
-            <h2 className="text-4xl md:text-6xl font-bold leading-tight">
-                Create Stunning Visuals <br/>
-                <span className="text-blue-500">On The Go.</span>
-            </h2>
+            <h1 className="text-4xl md:text-6xl font-bold leading-tight">
+                Free Online Image Editor <br/>
+                <span className="text-blue-500">Privacy First & No Signup.</span>
+            </h1>
             <p className="text-zinc-400 text-lg max-w-xl mx-auto">
-                The advanced, browser-based image editor for professionals. No sign-up required. Data stays on your device.
+                The best browser-based photo editor for professionals. Crop, resize, filter, and design without uploading your data.
             </p>
 
             <div className="flex flex-col md:flex-row gap-4 justify-center items-center">
@@ -132,17 +124,17 @@ export default function LandingPage() {
         </motion.div>
 
         {/* Projects List */}
-        <div className="mt-12">
+        <div>
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><FaImage className="text-blue-500" /> Your Projects</h3>
 
             {loading ? (
                 <div className="flex justify-center py-10"><div className="animate-spin h-8 w-8 border-4 border-blue-500 rounded-full border-t-transparent"></div></div>
             ) : projects.length === 0 ? (
                 <div className="text-center py-10 border-2 border-dashed border-zinc-800 rounded-2xl">
-                    <p className="text-zinc-500">No projects yet. Start creating!</p>
+                    <p className="text-zinc-500">No projects yet. Start creating below!</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {projects.map((p) => (
                         <motion.div
                             key={p.id}
@@ -184,17 +176,12 @@ export default function LandingPage() {
                                     <FaTrash />
                                 </button>
                             </div>
-                             <FaArrowRight className="text-zinc-600 group-hover:text-white transition-colors group-hover:translate-x-1" />
+                                <FaArrowRight className="text-zinc-600 group-hover:text-white transition-colors group-hover:translate-x-1" />
                         </motion.div>
                     ))}
                 </div>
             )}
         </div>
-      </main>
-
-      <footer className="p-6 text-center text-zinc-600 text-xs">
-        <p>&copy; 2025 Onyx Editor. All rights reserved locally.Made By Naman!</p>
-      </footer>
     </div>
   );
 }

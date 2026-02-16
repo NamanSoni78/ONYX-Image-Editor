@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { MORE_FONTS } from '@/lib/fonts';
+import JsonLd from '@/components/Seo/JsonLd';
 import "./globals.css";
+import { generateMetadata } from "@/lib/seo-metadata";
+import { generateOrganizationSchema, generateWebSiteSchema } from "@/lib/schema";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,29 +20,16 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false, // App-like feel
+  userScalable: false,
   themeColor: "#000000",
 };
 
-export const metadata: Metadata = {
+export const metadata: Metadata = generateMetadata({
   title: "Onyx Image Editor | Free Online Image Editor",
   description: "Professional browser-based image editor. Crop, filter, text, shapes, masking, and more. No sign-up required. Privacy-focused.",
-  keywords: ["image editor", "photo editor", "online editor", "free", "privacy", "onyx", "nextjs", "fabricjs", "crop", "mask", "filter"],
-  authors: [{ name: "Naman" }],
-  openGraph: {
-    title: "Onyx Image Editor",
-    description: "Create stunning visuals on the go. Advanced features, local processing.",
-    url: "https://onyx.namansoni.in/", // Placeholder or actual URL if known, safe to be generic
-    siteName: "Onyx Image Editor",
-    type: "website",
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Onyx Image Editor",
-    description: "Professional browser-based image editor. No sign-up required.",
-  },
-};
+  canonicalUrl: 'https://onyx.namansoni.in',
+  keywords: ["image editor", "photo editor", "online editor", "free", "privacy", "onyx", "nextjs", "fabricjs", "crop", "mask", "filter", "draw", "resize image", "add text to photo"],
+});
 
 export default function RootLayout({
   children,
@@ -51,6 +41,9 @@ export default function RootLayout({
   const allFonts = [...basicFonts, ...MORE_FONTS.map(f => f.replace(/ /g, '+'))];
   const fontUrl = `https://fonts.googleapis.com/css2?family=${allFonts.join('&family=')}&display=swap`;
 
+  const orgSchema = generateOrganizationSchema();
+  const webSiteSchema = generateWebSiteSchema();
+
   return (
     <html lang="en">
       <head>
@@ -60,6 +53,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-black text-white`}
       >
+        <JsonLd data={[orgSchema, webSiteSchema]} />
         {children}
       </body>
     </html>

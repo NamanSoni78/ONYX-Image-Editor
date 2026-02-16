@@ -1,28 +1,35 @@
-'use client';
+import React from 'react';
+import { generateMetadata as getSeoMetadata } from '@/lib/seo-metadata';
+import EditorClient from '@/components/Editor/EditorClient';
 
-import dynamic from 'next/dynamic';
-import React, { use } from 'react';
-
-const CanvasEditor = dynamic(() => import('@/components/Editor/CanvasEditor'), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-[100dvh] w-full items-center justify-center bg-black text-white">
-      <div className="flex flex-col items-center gap-4">
-        <div className="h-12 w-12 animate-spin rounded-full border-4 border-zinc-800 border-t-blue-500"></div>
-        <p className="text-sm font-bold tracking-widest text-zinc-500 animate-pulse">LOADING PROJECT...</p>
-      </div>
-    </div>
-  ),
-});
-
-// We need to handle params async in Next 15+ but standard props in 14/15 works for client components or Page props
-// Since this is a Page component, params is a Promise in latest Next.js or object in older.
-// Let's treat it safely.
-type Props = {
+interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-export default function EditorPage({ params }: Props) {
-  const { id } = use(params);
-  return <CanvasEditor projectId={id} />;
+export async function generateMetadata({ params }: PageProps) {
+  const { id } = await params;
+  return getSeoMetadata({
+    title: 'Edit Image - Onyx Studio',
+    description: 'Professional online image editor. Edit, crop, and filter your images securely in your browser.',
+    canonicalUrl: `https://onyx.namansoni.in/editor/${id}`,
+    keywords: ['online image editor', 'photo editor', 'browser editor'],
+  });
+}
+
+export default async function EditorPage({ params }: PageProps) {
+  const { id } = await params;
+
+  return (
+    <div className="h-screen w-screen overflow-hidden bg-black">
+      {/* Hidden SEO Content */}
+      <h1 className="sr-only">Onyx Image Editor Studio</h1>
+      <p className="sr-only">
+        You are currently using the Onyx Image Editor.
+        This tool runs entirely in your browser using WebAssembly and HTML5 Canvas.
+        Your privacy is protected as no images are uploaded to a server.
+      </p>
+
+      <EditorClient projectId={id} />
+    </div>
+  );
 }

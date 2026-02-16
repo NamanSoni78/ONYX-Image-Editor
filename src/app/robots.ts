@@ -5,7 +5,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: '*',
       allow: '/',
-      disallow: '/private/',
+      disallow: ['/api/*', '/_next/*', '/private/*', '/editor/canvas/*'],
     },
     sitemap: 'https://onyx.namansoni.in/sitemap.xml',
   };
