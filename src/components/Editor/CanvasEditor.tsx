@@ -15,9 +15,12 @@ import { useDebouncedCallback } from 'use-debounce';
 
 interface CanvasEditorProps {
     projectId?: string;
+    isEmbedded?: boolean;
+    allowedTools?: string[];
+    className?: string;
 }
 
-export default function CanvasEditor({ projectId }: CanvasEditorProps) {
+export default function CanvasEditor({ projectId, isEmbedded = false, allowedTools = ['all'], className = '' }: CanvasEditorProps) {
     const canvasRef = useRef<fabric.Canvas | null>(null);
     const containerRef = useRef<HTMLCanvasElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
@@ -929,7 +932,7 @@ export default function CanvasEditor({ projectId }: CanvasEditorProps) {
     };
 
     return (
-        <div className="flex flex-col h-[100dvh] bg-black relative overflow-hidden font-sans">
+        <div className={`flex flex-col bg-black relative overflow-hidden font-sans ${isEmbedded ? 'h-full ' + className : 'h-[100dvh]'}`}>
             {/* Crop Modal */}
             {cropData && (
                 <CropModal
@@ -944,9 +947,11 @@ export default function CanvasEditor({ projectId }: CanvasEditorProps) {
             {/* Top Bar */}
             <div className="h-14 flex justify-between items-center px-4 bg-zinc-900 border-b border-zinc-800 z-20 shrink-0">
                 <div className="flex gap-4 items-center">
-                    <button onClick={() => setSidebarOpen(true)} className="text-white text-xl hover:text-blue-400 transition-colors mr-2">
-                        <FaBars />
-                    </button>
+                    {!isEmbedded && (
+                        <button onClick={() => setSidebarOpen(true)} className="text-white text-xl hover:text-blue-400 transition-colors mr-2">
+                            <FaBars />
+                        </button>
+                    )}
                     <button
                         onClick={undo}
                         className={`text-xl transition-colors ${canUndo ? 'text-white hover:text-blue-400' : 'text-zinc-700 cursor-not-allowed'}`}

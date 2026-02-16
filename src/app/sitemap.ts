@@ -3,6 +3,7 @@ import { FEATURES } from '@/lib/features';
 import { BLOG_POSTS } from '@/lib/blog';
 import { RESIZE_PRESETS } from '@/lib/resize-presets';
 import { CONVERT_PRESETS } from '@/lib/convert-presets';
+import { COMPARISONS } from '@/lib/comparisons';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const features = FEATURES.map(feature => ({
@@ -33,6 +34,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.6,
   }));
 
+  const comparePages = COMPARISONS.map(comp => ({
+    url: `https://onyx.namansoni.in/compare/${comp.slug}`,
+    lastModified: new Date(),
+    changeFrequency: 'monthly' as const,
+    priority: 0.6,
+  }));
+
   return [
     {
       url: 'https://onyx.namansoni.in',
@@ -53,20 +61,15 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.9,
     },
     {
-      url: 'https://onyx.namansoni.in/tools/resize',
+      url: 'https://onyx.namansoni.in/compare',
       lastModified: new Date(),
-      changeFrequency: 'weekly',
-      priority: 0.8,
-    },
-    {
-      url: 'https://onyx.namansoni.in/tools/convert',
-      lastModified: new Date(),
-      changeFrequency: 'weekly',
-      priority: 0.8,
+      changeFrequency: 'monthly',
+      priority: 0.7,
     },
     ...features,
     ...blogPosts,
     ...resizePages,
     ...convertPages,
+    ...comparePages,
   ];
 }
