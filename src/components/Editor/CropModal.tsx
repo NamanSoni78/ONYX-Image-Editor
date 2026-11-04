@@ -1,8 +1,19 @@
 'use client';
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState } from 'react';
 import Cropper, { ReactCropperElement } from 'react-cropper';
 import 'cropperjs/dist/cropper.css';
+import clsx from 'clsx';
+import { FaXmark, FaCheck } from 'react-icons/fa6';
+
+const RATIOS: { label: string; value: number }[] = [
+  { label: 'Free', value: NaN },
+  { label: '1:1', value: 1 },
+  { label: '4:5', value: 4 / 5 },
+  { label: '3:2', value: 3 / 2 },
+  { label: '16:9', value: 16 / 9 },
+  { label: '9:16', value: 9 / 16 },
+];
 
 interface CropModalProps {
   src: string;
@@ -12,32 +23,70 @@ interface CropModalProps {
 
 export const CropModal: React.FC<CropModalProps> = ({ src, onCancel, onCrop }) => {
   const cropperRef = useRef<ReactCropperElement>(null);
+  const [ratio, setRatio] = useState<number>(NaN);
 
   const handleCrop = () => {
     const cropper = cropperRef.current?.cropper;
     if (cropper) {
-      onCrop(cropper.getCroppedCanvas().toDataURL());
+      onCrop(cropper.getCroppedCanvas().toDataURL('image/png'));
     }
   };
 
   return (
-    <div className="absolute inset-0 z-50 bg-black flex flex-col animate-in fade-in duration-200">
-      <div className="flex-1 p-4 relative bg-black flex items-center justify-center overflow-hidden">
+    <div className="fixed inset-0 z-[120] flex flex-col bg-black">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/10 px-3">
+        <span className="text-xs font-black uppercase tracking-[0.14em] text-zinc-300">Crop image</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            className="focus-ring flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-bold text-red-400 transition-colors hover:bg-red-500/10"
+          >
+            <FaXmark size={12} /> Cancel
+          </button>
+          <button
+            onClick={handleCrop}
+            className="focus-ring flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white"
+          >
+            <FaCheck size={12} /> Apply
+          </button>
+        </div>
+      </div>
+
+      {/* Ratio presets */}
+      <div className="flex justify-center gap-1.5 border-b border-white/5 py-2">
+        {RATIOS.map((r) => (
+          <button
+            key={r.label}
+            onClick={() => {
+              setRatio(r.value);
+              cropperRef.current?.cropper?.setAspectRatio(r.value);
+            }}
+            className={clsx(
+              'focus-ring rounded-lg px-3 py-1.5 text-[11px] font-bold transition-all active:scale-95',
+              (Number.isNaN(ratio) && Number.isNaN(r.value)) || ratio === r.value
+                ? 'bg-indigo-500/20 text-indigo-200'
+                : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'
+            )}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="relative flex-1 overflow-hidden bg-black p-3">
         <Cropper
           src={src}
           style={{ height: '100%', width: '100%' }}
           initialAspectRatio={NaN}
+          aspectRatio={NaN}
           guides={true}
           ref={cropperRef}
           viewMode={1}
           dragMode="move"
           background={false}
           responsive={true}
+          autoCropArea={0.9}
         />
-      </div>
-      <div className="h-16 bg-zinc-900 flex justify-between items-center px-6 border-t border-zinc-800 safe-area-pb">
-        <button onClick={onCancel} className="text-red-500 font-bold hover:text-red-400 transition-colors">Cancel</button>
-        <button onClick={handleCrop} className="text-blue-500 font-bold hover:text-blue-400 transition-colors">Apply Crop</button>
       </div>
     </div>
   );

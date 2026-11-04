@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { FaPlus, FaTrash } from 'react-icons/fa6';
-import { ColorPicker } from './ColorPicker';
 
 interface CustomGradientBuilderProps {
     onApply: (gradient: string) => void;

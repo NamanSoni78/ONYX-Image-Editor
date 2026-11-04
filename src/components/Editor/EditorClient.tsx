@@ -4,21 +4,21 @@ import React, { Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import { FaSpinner } from 'react-icons/fa6';
 
-// Dynamic import for the client-side editor with no SSR
+// Client-only editor; reads ?project= / ?preset= from the URL inside Suspense
 const CanvasEditor = dynamic(() => import('@/components/Editor/CanvasEditor'), {
   ssr: false,
   loading: () => (
-    <div className="h-screen w-full flex flex-col items-center justify-center bg-black text-white space-y-4">
-        <FaSpinner className="animate-spin text-4xl text-blue-500" />
-        <p className="text-zinc-400 font-medium animate-pulse">Loading Editor Environment...</p>
+    <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-onyx-950 text-white">
+      <FaSpinner className="animate-spin text-3xl text-indigo-400" />
+      <p className="animate-pulse font-medium text-zinc-400">Loading editor…</p>
     </div>
   ),
 });
 
-export default function EditorClient({ projectId }: { projectId: string }) {
+export default function EditorClient() {
   return (
     <Suspense fallback={null}>
-      <CanvasEditor projectId={projectId} />
+      <CanvasEditor />
     </Suspense>
   );
 }

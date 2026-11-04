@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor
+# 🎨 Onyx Image Editor v2.0
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,150 +6,82 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx** is a fast, free, privacy-first, browser-based online image editor built for modern content creators, designers, and developers. Powered by Next.js App Router and Fabric.js, Onyx allows you to edit, crop, filter, annotate, convert, and format photos without uploading them to any remote server.
+**Onyx v2.0** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
-🌐 **Hosted Live At:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
+🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
+
+---
+
+## ✨ What's new in v2.0
+
+### 🖥️ Pro desktop workspace
+- Figma-style layout: **left tool rail** (tooltips + shortcuts) · center canvas · **right contextual properties panel** with layers
+- **Document-based canvas** — true-resolution exports (v1 exported screen resolution), zoom/pan (wheel, pinch, space-drag), fit/100%
+- **Command palette** (`Ctrl+K`), **30+ keyboard shortcuts** (`?` for the cheat sheet), align-to-canvas, numeric transform inputs
+
+### 📱 Mobile-first editing
+- Bottom toolbar + bottom-sheet tool panels, pinch-to-zoom the document, two-finger pan, drag handles, safe-area aware
+
+### 🛠️ More editing power
+- 15 filter presets + 6 stackable adjustments (brightness/contrast/saturation/hue/blur/grain) that **no longer clobber each other**
+- **Hold-to-compare** original, remove-color (color key) with tolerance, crop with ratio presets, image masking, text with 12 fonts/spacing/line-height, stickers, draw, layers with thumbnails/visibility/lock
+- **Export v2**: PNG (transparent) / JPG / WebP · quality · 0.5×–3× scale · custom width · **copy-to-clipboard**
+- Drag & drop, clipboard paste (image + text), onboarding size presets (Instagram, Story, YouTube, X, Pinterest, Facebook)
+
+### ⚡ Performance & hosting
+- **100% static export** → zero serverless invocations on Vercel (the free Fluid-CPU allowance is never drained by traffic)
+- **Installable PWA** with service worker — full offline editing
+- Autosaved projects (IndexedDB) with **scratch mode** (no more empty-project spam), inline rename, `.onyx` project import/export
+
+### 🧹 Focused site
+- Blog, comparison and programmatic SEO pages removed — three fast pages: `/`, `/tools`, `/editor`
 
 ---
 
 ## 🌟 Key Features
 
-### 🔒 100% Private & Client-Side
-* **Local WebAssembly & Canvas Engine:** All photo edits—cropping, filtering, resizing, and drawing—are computed directly on your browser's WebAssembly and Canvas runtime.
-* **Zero Server Uploads:** Your photos never leave your device. You can even load Onyx and edit images completely offline.
-
-### 💾 Local Project Persistence (IndexedDB)
-* Auto-saves your ongoing projects and canvas sessions locally using browser IndexedDB.
-* Revisit, rename, export, or delete saved projects from your personal Project Dashboard anytime.
-
-### ✂️ Comprehensive Editing Suite
-* **Image Cropper:** Aspect ratio presets (Instagram 1:1, Stories 9:16, YouTube 16:9, etc.) and freehand cropping.
-* **Photo Resizer & Converter:** Easily scale dimensions and convert between formats (`JPG`, `PNG`, `WebP`).
-* **Filters & Adjustments:** Grayscale, Sepia, Vintage, Blur, Brightness, Saturation, and Contrast fine-tuning.
-* **Drawing & Annotations:** Freehand pencil tool, highlighters, customizable shapes, and drop shadows.
-* **Text & Typography:** Rich text overlays integrated with Google Fonts library.
-* **Image Masking:** Clip photos into custom shapes (Circles, Hearts, Stars).
-* **Layer Management:** Drag-and-drop layer reordering and element visibility controls.
-
-### 🚀 Search Engine & Performance Optimized
-* Server-Side Pre-rendered (SSR) HTML pages for high-intent tool landing pages (`/tools/crop`, `/tools/resize`, `/tools/convert`, etc.).
-* Dynamic JSON-LD structured data (`SoftwareApplication`, `HowTo`, `FAQPage`, `BreadcrumbList`, `Article`).
-* Core Web Vitals optimized using dynamic imports, streaming Suspense boundaries, and zero-CLS font rendering.
-
----
+- 🔒 **100% private** — Canvas + WebAssembly engine, zero server uploads, works offline
+- 💾 **Local project persistence** — autosave, thumbnails, rename, import/export
+- ✂️ **Full editing suite** — crop, mask, filters, adjustments, text, shapes, draw, stickers, layers
+- 🚀 **Instant** — static shell, cached assets, trimmed font payload
 
 ## 🛠️ Tech Stack
 
-* **Framework:** [Next.js 16](https://nextjs.org) (App Router)
-* **Frontend Library:** [React 19](https://react.dev)
-* **Canvas Engine:** [Fabric.js v5](http://fabricjs.com/)
-* **Styling & UI:** [Tailwind CSS v4](https://tailwindcss.com/), [Framer Motion](https://www.framer.com/motion/), [React Icons](https://react-icons.github.io/react-icons/)
-* **Local Storage:** [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) via `idb`
-* **Type Safety:** [TypeScript](https://www.typescript.org/)
-* **SEO Utility:** Programmatic Schema Markup Generators & Next.js Dynamic Metadata API
-
----
-
-## 🏗️ Project Structure
-
-```
-onyx/
-├── public/                 # Static public assets, icons, and blog images
-├── src/
-│   ├── app/                # Next.js App Router hierarchy
-│   │   ├── (site)/         # Public SEO pages layout (Landing, Blog, Tools, Compare)
-│   │   │   ├── blog/       # Blog hub & individual posts
-│   │   │   ├── compare/    # Competitor comparison pages
-│   │   │   ├── tools/      # Programmatic tool landing pages (/crop, /resize, /convert, etc.)
-│   │   │   ├── layout.tsx  # Site layout with global header & footer
-│   │   │   └── page.tsx    # Onyx landing page
-│   │   ├── editor/         # Fullscreen Canvas Editor route
-│   │   │   └── page.tsx    # Interactive Canvas Editor App
-│   │   ├── globals.css     # Tailwind CSS & global styling
-│   │   ├── layout.tsx      # Root HTML layout & Schema JSON-LD injection
-│   │   ├── robots.ts       # Dynamic robots.txt generation
-│   │   └── sitemap.ts      # Dynamic XML sitemap generator
-│   ├── components/
-│   │   ├── Editor/         # Canvas Editor components (Toolbar, Layers, Export Panel)
-│   │   ├── Home/           # Landing page sections (Features, FAQ, HowItWorks, Dashboard)
-│   │   ├── Layout/         # Header and Sidebar navigation
-│   │   ├── Seo/            # JSON-LD Schema component helper
-│   │   └── ui/             # Reusable UI primitives
-│   └── lib/                # Core logic, presets, data models, storage utilities
-│       ├── blog.ts         # Blog post definitions
-│       ├── features.ts     # Tool feature data models & SEO content
-│       ├── schema.ts       # Structured JSON-LD schema generators
-│       ├── seo-metadata.ts # Metadata generation utility
-│       └── storage.ts      # IndexedDB project management helper
-├── next.config.ts          # Next.js build configuration
-├── tsconfig.json           # TypeScript configuration
-└── package.json            # Dependencies and scripts
-```
-
----
+| Layer | Tech |
+|---|---|
+| Framework | [Next.js 16](https://nextjs.org) (App Router, `output: 'export'`) |
+| UI | [React 19](https://react.dev) · [Tailwind CSS v4](https://tailwindcss.com) · [framer-motion](https://motion.dev) · [react-icons](https://react-icons.github.io/react-icons/) |
+| Canvas engine | [Fabric.js v5](http://fabricjs.com/) |
+| Storage | IndexedDB via [idb](https://github.com/jakearchibald/idb) |
+| Cropping | [react-cropper](https://github.com/react-cropper/react-cropper) |
+| PWA | Custom service worker (`public/sw.js`) + manifest |
 
 ## 🚀 Getting Started
 
-### Prerequisites
+```bash
+npm install
+npm run dev        # http://localhost:3000
+npm run build      # static export → out/ (zero server functions)
+npm run lint       # eslint (0 errors / 0 warnings expected)
+```
 
-* **Node.js**: `v18.17.0` or higher
-* **npm**, **pnpm**, **yarn**, or **bun**
+**Deploy (Vercel):** import the repo — the static export is detected automatically. Security headers live in `vercel.json`.
 
-### Installation
+## 📁 Documentation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/namansoni/onyx.git
-   cd onyx
-   ```
+| File | Contents |
+|---|---|
+| [`plan.md`](./plan.md) | v2.0 upgrade plan — goals, architecture decisions, feature matrix |
+| [`worklog.md`](./worklog.md) | Chronological log of all v2.0 work |
+| [`bugfix.md`](./bugfix.md) | Bugs fixed, breaking changes, known limitations |
+| [`structure.md`](./structure.md) | Full file map + conventions for future contributors/agents |
 
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+## ⚠️ v2 breaking changes
 
-3. **Run the development server:**
-   ```bash
-   npm run dev
-   ```
-
-4. **Open in browser:**
-   Navigate to [http://localhost:3000](http://localhost:3000) to view Onyx locally.
+- Editor URLs changed: `/editor/<id>` → **`/editor?project=<id>`**
+- Blog / compare / programmatic tool pages removed (now a single `/tools` page)
+- v1 saved projects open fine — document size is derived automatically on first load
 
 ---
 
-## 📜 Production Scripts
-
-* `npm run dev` - Starts the Next.js development server.
-* `npm run build` - Builds the application for production deployment.
-* `npm run start` - Starts the production server.
-* `npm run lint` - Runs ESLint code quality checks.
-
----
-
-## 🌐 Hosted Deployment
-
-This project is deployed and hosted live on Vercel at:
-👉 **[https://onyx.namansoni.in](https://onyx.namansoni.in)**
-
----
-
-## 🤝 Contributing
-
-Contributions, bug reports, and feature requests are welcome!
-
-1. Fork the Project.
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`).
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`).
-4. Push to the Branch (`git push origin feature/AmazingFeature`).
-5. Open a Pull Request.
-
----
-
-## 📄 License
-
-Distributed under the **MIT License**. See `LICENSE` for more information.
-
----
-
-Made with ❤️ by [Naman Soni](https://namansoni.in).
+Made with ❤️ by [Naman Soni](https://namansoni.in). Distributed under the MIT License.

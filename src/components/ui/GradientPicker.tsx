@@ -5,7 +5,8 @@ import { CustomGradientBuilder } from './CustomGradientBuilder';
 interface GradientPickerProps {
   selected: string;
   onChange: (gradient: string) => void;
-  onCustomGradient: (colors: string[]) => void;
+  /** v1 API compat — the custom builder opens via the + chip */
+  onCustomGradient?: (colors: string[]) => void;
 }
 
 const GRADIENTS = [
@@ -19,7 +20,7 @@ const GRADIENTS = [
   'radial-gradient(circle, #a18cd1, #fbc2eb)',
 ];
 
-export const GradientPicker: React.FC<GradientPickerProps> = ({ selected, onChange, onCustomGradient }) => {
+export const GradientPicker: React.FC<GradientPickerProps> = ({ selected, onChange }) => {
     const [showBuilder, setShowBuilder] = useState(false);
 
     if (showBuilder) {

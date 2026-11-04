@@ -1,9 +1,11 @@
+'use client';
+
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FaPlus, FaXmark, FaImage, FaHouse, FaTrash } from 'react-icons/fa6';
-import { getAllProjects, createProject, deleteProject } from '@/lib/storage';
+import { getAllProjects, deleteProject } from '@/lib/storage';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -14,40 +16,33 @@ interface SidebarProps {
 interface Project {
   id: string;
   name: string;
+  thumbnail?: string;
   lastModified: number;
 }
 
+/** Projects drawer (mobile editor + shared look) */
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjectId }) => {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
 
+  async function loadProjects() {
+    const list = await getAllProjects();
+    setProjects(list.reverse().slice(0, 30));
+  }
+
   useEffect(() => {
-    if (isOpen) {
-        loadProjects();
-    }
+    // Reload list each time the drawer opens (setState after await — intentional).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (isOpen) loadProjects();
   }, [isOpen]);
 
-  const loadProjects = async () => {
-    const list = await getAllProjects();
-    setProjects(list.reverse());
-  };
-
-  const handleNewProject = async () => {
-    const id = await createProject();
-    router.push(`/editor/${id}`);
-    onClose();
-  };
-
   const handleDelete = async (e: React.MouseEvent, id: string) => {
-      e.stopPropagation();
-      if(confirm("Delete this project?")) {
-          await deleteProject(id);
-          if(id === currentProjectId) {
-              router.push('/');
-          } else {
-              loadProjects();
-          }
-      }
+    e.stopPropagation();
+    if (confirm('Delete this project? This cannot be undone.')) {
+      await deleteProject(id);
+      if (id === currentProjectId) router.push('/');
+      else loadProjects();
+    }
   };
 
   return (
@@ -59,60 +54,81 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjec
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
           />
           <motion.div
             initial={{ x: '-100%' }}
             animate={{ x: 0 }}
             exit={{ x: '-100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className="fixed left-0 top-0 bottom-0 w-80 bg-zinc-900 z-50 border-r border-white/10 flex flex-col"
+            transition={{ type: 'spring', damping: 30, stiffness: 340 }}
+            className="fixed bottom-0 left-0 top-0 z-50 flex w-80 max-w-[85vw] flex-col border-r border-white/10 bg-onyx-900"
           >
-            <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                <span className="font-black tracking-widest bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">ONYX</span>
-                <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors"><FaXmark /></button>
+            <div className="flex items-center justify-between border-b border-white/10 p-4">
+              <span className="text-brand-gradient text-sm font-black tracking-[0.18em]">ONYX</span>
+              <button onClick={onClose} aria-label="Close" className="focus-ring rounded-full p-2 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white">
+                <FaXmark />
+              </button>
             </div>
 
-            <div className="p-4 space-y-2">
-                <button
-                    onClick={handleNewProject}
-                    className="w-full py-3 bg-white text-black rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-50 transition-colors"
-                >
-                    <FaPlus /> New Project
-                </button>
-
-                <Link
-                    href="/"
-                    className="w-full py-3 bg-zinc-800 text-zinc-400 rounded-xl font-bold flex items-center justify-center gap-2 hover:text-white hover:bg-zinc-700 transition-colors"
-                    onClick={onClose}
-                >
-                    <FaHouse /> Back to Home
-                </Link>
+            <div className="space-y-2 p-4">
+              <Link
+                href="/editor"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]"
+              >
+                <FaPlus /> New Project
+              </Link>
+              <Link
+                href="/"
+                onClick={onClose}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-800/70 py-3 text-sm font-bold text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+              >
+                <FaHouse /> Back to Home
+              </Link>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-                <h4 className="text-xs font-bold text-zinc-500 mb-4 uppercase tracking-wider">Your Projects</h4>
-                <div className="space-y-2">
-                    {projects.map(p => (
-                        <div
-                            key={p.id}
-                            onClick={() => { router.push(`/editor/${p.id}`); onClose(); }}
-                            className={`p-3 rounded-lg cursor-pointer flex items-center gap-3 group transition-colors ${currentProjectId === p.id ? 'bg-blue-500/20 text-blue-400 border border-blue-500/50' : 'hover:bg-zinc-800 text-zinc-300'}`}
-                        >
-                            <FaImage className="text-lg opacity-50" />
-                            <div className="flex-1 min-w-0">
-                                <div className="text-sm font-bold truncate">{p.name}</div>
-                                <div className="text-[10px] opacity-50">{new Date(p.lastModified).toLocaleDateString()}</div>
-                            </div>
-                            <button
-                                onClick={(e) => handleDelete(e, p.id)}
-                                className="opacity-0 group-hover:opacity-100 p-2 hover:text-red-400 transition-all"
-                            >
-                                <FaTrash size={12} />
-                            </button>
-                        </div>
-                    ))}
-                </div>
+              <h4 className="mb-3 text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">Your Projects</h4>
+              <div className="space-y-2">
+                {projects.map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => {
+                      router.push(`/editor?project=${p.id}`);
+                      onClose();
+                    }}
+                    className={`group flex cursor-pointer items-center gap-3 rounded-xl border p-2.5 transition-all ${
+                      currentProjectId === p.id
+                        ? 'border-indigo-400/50 bg-indigo-500/15'
+                        : 'border-transparent hover:border-white/10 hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    <div className="checkerboard flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10">
+                      {p.thumbnail ? (
+                        <img src={p.thumbnail} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <FaImage className="text-zinc-600" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-bold text-zinc-200">{p.name}</div>
+                      <div className="text-[10px] text-zinc-500">
+                        {new Date(p.lastModified).toLocaleDateString()} ·{' '}
+                        {new Date(p.lastModified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => handleDelete(e, p.id)}
+                      aria-label={`Delete ${p.name}`}
+                      className="rounded-lg p-2 text-zinc-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
+                    >
+                      <FaTrash size={12} />
+                    </button>
+                  </div>
+                ))}
+                {projects.length === 0 && (
+                  <p className="py-8 text-center text-xs text-zinc-600">No saved projects yet.</p>
+                )}
+              </div>
             </div>
           </motion.div>
         </>

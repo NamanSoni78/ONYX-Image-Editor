@@ -1,39 +1,64 @@
-import { FaQuestion } from 'react-icons/fa6';
+import { FaChevronDown } from 'react-icons/fa6';
 import JsonLd from '@/components/Seo/JsonLd';
+
+const FAQS: { q: string; a: string }[] = [
+  {
+    q: 'Is Onyx really free?',
+    a: 'Yes — every tool and filter is free, with no watermarks, no sign-up, and no premium tier.',
+  },
+  {
+    q: 'Are my photos uploaded anywhere?',
+    a: 'No. All editing happens locally in your browser using Canvas + WebAssembly. Your images never leave your device — you can even edit offline.',
+  },
+  {
+    q: 'Can I use it on my phone?',
+    a: 'Yes. Onyx has a dedicated touch experience: bottom toolbars, bottom sheets, pinch-to-zoom and drag handles, built mobile-first.',
+  },
+  {
+    q: 'What formats can I export?',
+    a: 'PNG (with optional transparency), JPG (with quality control), and WebP where your browser supports it — at 0.5× up to 3× scale.',
+  },
+  {
+    q: 'Do I lose my work if I close the tab?',
+    a: 'Projects autosave to your browser (IndexedDB) as you edit. Reopen them any time from the dashboard. You can also export a project file and import it later.',
+  },
+  {
+    q: 'Does it work offline?',
+    a: 'Yes — install Onyx as an app (Add to Home Screen) and the service worker keeps the editor available even without a network.',
+  },
+];
 
 export default function FaqSection() {
   const faqSchema = {
-    "@context": "https://schema.org",
-    "@type": "FAQPage",
-    "mainEntity": [
-      { "@type": "Question", "name": "Is Onyx really free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes, Onyx is completely free to use. There are no watermarks or premium-only features." } },
-      { "@type": "Question", "name": "Is my data safe?", "acceptedAnswer": { "@type": "Answer", "text": "Absolutely. Onyx runs entirely in your browser. We do not store or see your images." } },
-      { "@type": "Question", "name": "Can I use it on mobile?", "acceptedAnswer": { "@type": "Answer", "text": "Yes, Onyx is optimized for touch devices, allowing you to edit photos on your phone or tablet." } }
-    ]
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: FAQS.map((f) => ({
+      '@type': 'Question',
+      name: f.q,
+      acceptedAnswer: { '@type': 'Answer', text: f.a },
+    })),
   };
 
   return (
     <>
-        <JsonLd data={faqSchema} />
-        <section id="faq" className="max-w-3xl mx-auto w-full space-y-8">
-             <div className="text-center space-y-4">
-                <h2 className="text-3xl md:text-4xl font-bold">Frequently Asked Questions</h2>
-            </div>
-            <div className="space-y-4">
-                 <div className="border border-white/10 rounded-xl overflow-hidden bg-zinc-900/20">
-                    <div className="p-4 font-bold text-lg bg-white/5 flex gap-4 items-center"><FaQuestion className="text-blue-500 text-sm"/> Is Onyx really free?</div>
-                    <div className="p-4 text-zinc-400 pt-0">Yes, Onyx is completely free to use. There are no watermarks or premium-only features.</div>
-                </div>
-                <div className="border border-white/10 rounded-xl overflow-hidden bg-zinc-900/20">
-                    <div className="p-4 font-bold text-lg bg-white/5 flex gap-4 items-center"><FaQuestion className="text-blue-500 text-sm"/> Is my data safe?</div>
-                    <div className="p-4 text-zinc-400 pt-0">Absolutely. Onyx runs entirely in your browser. We do not store or see your images.</div>
-                </div>
-                <div className="border border-white/10 rounded-xl overflow-hidden bg-zinc-900/20">
-                    <div className="p-4 font-bold text-lg bg-white/5 flex gap-4 items-center"><FaQuestion className="text-blue-500 text-sm"/> Can I use it on mobile?</div>
-                    <div className="p-4 text-zinc-400 pt-0">Yes, Onyx is optimized for touch devices, allowing you to edit photos on your phone or tablet.</div>
-                </div>
-            </div>
-        </section>
+      <JsonLd data={faqSchema} />
+      <section id="faq" className="mx-auto w-full max-w-3xl space-y-8">
+        <div className="space-y-3 text-center">
+          <p className="text-[11px] font-black uppercase tracking-[0.2em] text-indigo-400">FAQ</p>
+          <h2 className="text-3xl font-bold md:text-4xl">Questions, answered</h2>
+        </div>
+        <div className="space-y-2.5">
+          {FAQS.map((f) => (
+            <details key={f.q} className="group overflow-hidden rounded-xl border border-white/10 bg-zinc-900/30 transition-colors hover:border-white/20">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 text-sm font-bold text-zinc-100 marker:hidden">
+                {f.q}
+                <FaChevronDown size={12} className="shrink-0 text-zinc-500 transition-transform group-open:rotate-180" />
+              </summary>
+              <p className="px-4 pb-4 text-sm leading-relaxed text-zinc-400">{f.a}</p>
+            </details>
+          ))}
+        </div>
+      </section>
     </>
   );
 }

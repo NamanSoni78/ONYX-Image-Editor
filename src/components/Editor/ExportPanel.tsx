@@ -1,118 +1,183 @@
 'use client';
 
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { FaXmark, FaDownload, FaLock, FaLockOpen } from 'react-icons/fa6';
+import React, { useMemo, useState } from 'react';
+import clsx from 'clsx';
+import { FaDownload, FaCopy } from 'react-icons/fa6';
+import { Modal } from '@/components/ui/Modal';
+import { useToast } from '@/components/ui/Toast';
+import { useEditor } from './EditorContext';
 
-interface ExportPanelProps {
-  onClose: () => void;
-  onExport: (format: 'png' | 'jpeg', quality: number, options: { width: number, height: number, ratio: boolean }) => void;
-}
+type Format = 'png' | 'jpeg' | 'webp';
 
-export const ExportPanel: React.FC<ExportPanelProps> = ({ onClose, onExport }) => {
-  const [format, setFormat] = useState<'png' | 'jpeg'>('png');
-  const [quality, setQuality] = useState(1);
-  const [width, setWidth] = useState(1080);
-  const [height, setHeight] = useState(1080);
-  const [ratio, setRatio] = useState(true);
+export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const { docSize, exportImage } = useEditor();
+  const { toast } = useToast();
 
-  const handleWidthChange = (val: number) => {
-    setWidth(val);
-    if (ratio) setHeight(val);
+  const supportsWebP = useMemo(() => {
+    if (typeof document === 'undefined') return false;
+    try {
+      return document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp');
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const [format, setFormat] = useState<Format>('png');
+  const [quality, setQuality] = useState(0.92);
+  const [scale, setScale] = useState(1);
+  const [customW, setCustomW] = useState<number | null>(null);
+  const [transparent, setTransparent] = useState(false);
+
+  // Custom width → derive scale
+  const effectiveScale = customW ? clampScale(customW / docSize.width) : scale;
+  const outW = Math.round(docSize.width * effectiveScale);
+  const outH = Math.round(docSize.height * effectiveScale);
+
+  function clampScale(s: number) {
+    return Math.min(4, Math.max(0.1, s));
+  }
+
+  const run = async (mode: 'download' | 'copy') => {
+    if (mode === 'copy' && format !== 'png') {
+      toast('Clipboard copy supports PNG only', 'warning');
+      return;
+    }
+    await exportImage({ format, quality, scale: effectiveScale, transparent, mode });
+    onClose();
   };
 
-  const handleHeightChange = (val: number) => {
-    setHeight(val);
-    if (ratio) setWidth(val);
-  };
+  const scales = [0.5, 1, 2, 3];
 
   return (
-    <motion.div
-      initial={{ y: '100%' }}
-      animate={{ y: 0 }}
-      exit={{ y: '100%' }}
-      transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-      className="absolute bottom-0 w-full bg-zinc-900 rounded-t-2xl z-40 shadow-2xl p-4 border-t border-zinc-800 pb-10"
-    >
-      <div className="flex justify-between mb-6 items-center">
-        <span className="font-bold text-white text-lg">Export Settings</span>
-        <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-full transition-colors">
-            <FaXmark className="text-zinc-400 hover:text-white" />
-        </button>
-      </div>
-
-      <div className="space-y-6">
-        {/* Dimensions */}
-        <div className="flex gap-4 items-end">
-            <div className="flex-1">
-                <label className="text-[10px] font-bold text-zinc-500 mb-1 block uppercase">Width (px)</label>
-                <input
-                    type="number"
-                    value={width}
-                    onChange={(e) => handleWidthChange(parseInt(e.target.value) || 0)}
-                    className="w-full bg-zinc-800 text-white p-2 rounded-lg border border-zinc-700 text-sm font-bold"
-                />
-            </div>
-            <button
-                onClick={() => setRatio(!ratio)}
-                className={`p-2 rounded-lg mb-1 ${ratio ? 'text-blue-400 bg-blue-500/10' : 'text-zinc-500 hover:bg-zinc-800'}`}
-            >
-                {ratio ? <FaLock /> : <FaLockOpen />}
-            </button>
-            <div className="flex-1">
-                <label className="text-[10px] font-bold text-zinc-500 mb-1 block uppercase">Height (px)</label>
-                <input
-                    type="number"
-                    value={height}
-                    onChange={(e) => handleHeightChange(parseInt(e.target.value) || 0)}
-                    className="w-full bg-zinc-800 text-white p-2 rounded-lg border border-zinc-700 text-sm font-bold"
-                />
-            </div>
-        </div>
-
+    <Modal open={open} onClose={onClose} title="Export image" subtitle={`${outW} × ${outH} px output`}>
+      <div className="space-y-5">
+        {/* Format */}
         <div>
-            <label className="text-xs font-bold text-zinc-500 mb-2 block">FORMAT</label>
-            <div className="flex gap-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Format</p>
+          <div className="flex gap-2">
+            {(['png', 'jpeg', 'webp'] as Format[]).map((f) => {
+              const disabled = f === 'webp' && !supportsWebP;
+              return (
                 <button
-                    onClick={() => setFormat('png')}
-                    className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors ${format === 'png' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                  key={f}
+                  disabled={disabled}
+                  onClick={() => setFormat(f)}
+                  className={clsx(
+                    'focus-ring flex-1 rounded-xl border py-3 text-sm font-bold transition-all active:scale-[0.97]',
+                    format === f
+                      ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
+                      : disabled
+                        ? 'cursor-not-allowed border-white/5 bg-zinc-800/30 text-zinc-600'
+                        : 'border-white/10 bg-zinc-800/60 text-zinc-300 hover:border-white/20'
+                  )}
                 >
-                    PNG
+                  {f === 'jpeg' ? 'JPG' : f.toUpperCase()}
                 </button>
-                <button
-                    onClick={() => setFormat('jpeg')}
-                    className={`flex-1 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors ${format === 'jpeg' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
-                >
-                    JPG
-                </button>
-            </div>
+              );
+            })}
+          </div>
+          {format === 'png' && <p className="mt-1.5 text-[10px] text-zinc-500">PNG keeps transparency &amp; sharp text.</p>}
+          {format === 'jpeg' && <p className="mt-1.5 text-[10px] text-zinc-500">Smaller files, no transparency. Great for photos.</p>}
+          {format === 'webp' && <p className="mt-1.5 text-[10px] text-zinc-500">Modern format — smallest files at high quality.</p>}
         </div>
 
-        {format === 'jpeg' && (
-             <div>
-                <div className="flex justify-between text-[10px] text-zinc-400 font-bold mb-1 uppercase">
-                    <span>Quality</span>
-                    <span>{Math.round(quality * 100)}%</span>
-                </div>
-                <input
-                    type="range"
-                    min={0.1}
-                    max={1}
-                    step={0.1}
-                    value={quality}
-                    onChange={(e) => setQuality(parseFloat(e.target.value))}
-                    className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                />
+        {/* Quality */}
+        {format !== 'png' && (
+          <div>
+            <div className="mb-1.5 flex justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+              <span>Quality</span>
+              <span className="font-mono text-zinc-300">{Math.round(quality * 100)}%</span>
             </div>
+            <input
+              type="range"
+              min={0.3}
+              max={1}
+              step={0.02}
+              value={quality}
+              onChange={(e) => setQuality(parseFloat(e.target.value))}
+              className="onyx-range w-full"
+            />
+          </div>
         )}
 
-        <button
-            onClick={() => onExport(format, quality, { width, height, ratio })}
-            className="w-full bg-white text-black py-4 rounded-xl font-bold text-base mt-2 flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors"
-        >
-            <FaDownload /> Download Image
-        </button>
+        {/* Scale */}
+        <div>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Scale</p>
+          <div className="flex gap-2">
+            {scales.map((s) => (
+              <button
+                key={s}
+                onClick={() => {
+                  setScale(s);
+                  setCustomW(null);
+                }}
+                className={clsx(
+                  'focus-ring flex-1 rounded-xl border py-2.5 font-mono text-xs font-bold transition-all active:scale-[0.97]',
+                  !customW && scale === s
+                    ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
+                    : 'border-white/10 bg-zinc-800/60 text-zinc-300 hover:border-white/20'
+                )}
+              >
+                {s}×
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              min={16}
+              placeholder={`Custom width (default ${docSize.width})`}
+              value={customW ?? ''}
+              onChange={(e) => {
+                const v = e.target.value ? parseInt(e.target.value) : null;
+                setCustomW(v && v >= 16 ? v : null);
+              }}
+              className="focus-ring w-full rounded-lg border border-white/10 bg-zinc-800/70 px-3 py-2 font-mono text-xs text-zinc-100 outline-none placeholder:font-sans placeholder:text-zinc-600 focus:border-indigo-400/50"
+            />
+          </div>
+        </div>
+
+        {/* Transparent */}
+        {format === 'png' && (
+          <label className="flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-zinc-800/30 p-3">
+            <span className="text-xs font-bold text-zinc-200">
+              Transparent background
+              <span className="block text-[10px] font-medium text-zinc-500">Removes the canvas color from the export</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setTransparent((t) => !t)}
+              aria-label="Toggle transparent background"
+              className={clsx('focus-ring relative h-5 w-9 shrink-0 rounded-full transition-colors', transparent ? 'bg-indigo-500' : 'bg-zinc-700')}
+            >
+              <span className={clsx('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all', transparent ? 'left-[18px]' : 'left-0.5')} />
+            </button>
+          </label>
+        )}
+
+        {/* Output preview */}
+        <div className="rounded-xl border border-white/10 bg-zinc-800/30 px-3 py-2.5 font-mono text-[11px] text-zinc-400">
+          {outW} × {outH} px · {format === 'png' ? 'PNG' : format === 'jpeg' ? `JPG ${Math.round(quality * 100)}%` : `WebP ${Math.round(quality * 100)}%`}
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          {format === 'png' && (
+            <button
+              onClick={() => void run('copy')}
+              className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-800/70 py-3.5 text-sm font-bold text-zinc-100 transition-colors hover:bg-zinc-800"
+            >
+              <FaCopy size={13} /> Copy
+            </button>
+          )}
+          <button
+            onClick={() => void run('download')}
+            className="focus-ring flex flex-[2] items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]"
+          >
+            <FaDownload size={13} /> Download
+          </button>
+        </div>
       </div>
-    </motion.div>
+    </Modal>
   );
 };

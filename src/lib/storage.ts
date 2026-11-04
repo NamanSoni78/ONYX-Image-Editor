@@ -7,6 +7,9 @@ interface Project {
   thumbnail?: string;
   lastModified: number;
   data: string; // Fabric JSON string
+  /** v2: document dimensions so the editor can restore the canvas size */
+  docW?: number;
+  docH?: number;
 }
 
 interface OnyxDB extends DBSchema {
@@ -29,14 +32,14 @@ const getDB = async () => {
   });
 };
 
-export const createProject = async (): Promise<string> => {
+export const createProject = async (name?: string, data?: string): Promise<string> => {
   const db = await getDB();
   const id = uuidv4();
   const newProject: Project = {
     id,
-    name: `Untitled Project ${new Date().toLocaleDateString()}`,
+    name: name || `Untitled ${new Date().toLocaleDateString()}`,
     lastModified: Date.now(),
-    data: JSON.stringify({ version: '5.3.0', objects: [] }), // Empty canvas
+    data: data || JSON.stringify({ version: '5.3.0', objects: [] }), // Empty canvas
   };
   await db.put(STORE_NAME, newProject);
   return id;
@@ -52,7 +55,13 @@ export const getAllProjects = async (): Promise<Project[]> => {
   return db.getAllFromIndex(STORE_NAME, 'by-date');
 };
 
-export const updateProject = async (id: string, data: string, thumbnail?: string, name?: string) => {
+export const updateProject = async (
+  id: string,
+  data: string,
+  thumbnail?: string,
+  name?: string,
+  meta?: { docW: number; docH: number }
+) => {
   const db = await getDB();
   const project = await db.get(STORE_NAME, id);
   if (!project) return;
@@ -63,6 +72,7 @@ export const updateProject = async (id: string, data: string, thumbnail?: string
     lastModified: Date.now(),
     ...(thumbnail ? { thumbnail } : {}),
     ...(name ? { name } : {}),
+    ...(meta ? meta : {}),
   };
   await db.put(STORE_NAME, updatedProject);
 };
