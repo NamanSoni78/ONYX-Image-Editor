@@ -46,6 +46,9 @@ export default function ProjectDashboard() {
   // new project preset dropdown
   const [presetOpen, setPresetOpen] = useState(false);
 
+  // import failure banner (replaces the native alert())
+  const [importError, setImportError] = useState(false);
+
   async function loadProjects() {
     const list = await getAllProjects();
     setProjects(list.reverse());
@@ -94,7 +97,10 @@ export default function ProjectDashboard() {
     if (!file) return;
     const id = await importProject(file);
     if (id) router.push(`/editor?project=${id}`);
-    else alert('Could not import — not a valid Onyx project file.');
+    else {
+      setImportError(true);
+      setTimeout(() => setImportError(false), 4000);
+    }
     e.target.value = '';
   };
 
@@ -159,6 +165,11 @@ export default function ProjectDashboard() {
             <FaFileImport /> Import
           </button>
           <input type="file" accept=".onyx" ref={fileInputRef} className="hidden" onChange={handleImportFile} />
+          {importError && (
+            <p role="alert" className="w-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-xs font-semibold text-red-300">
+              Could not import — not a valid Onyx project file.
+            </p>
+          )}
         </div>
       </div>
 
@@ -194,8 +205,8 @@ export default function ProjectDashboard() {
                     <FaImage />
                   </div>
                 )}
-                {/* hover actions */}
-                <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/55 opacity-0 backdrop-blur-[2px] transition-opacity group-hover:opacity-100">
+                {/* hover actions (always visible on touch devices) */}
+                <div className="touch-visible absolute inset-0 flex items-center justify-center gap-2 bg-black/55 opacity-0 backdrop-blur-[2px] transition-opacity group-hover:opacity-100">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();

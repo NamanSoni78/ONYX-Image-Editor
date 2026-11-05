@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import {
   FaArrowPointer, FaImage, FaFont, FaShapes, FaPen, FaFaceSmile, FaCropSimple,
   FaMask, FaSliders, FaWandMagicSparkles, FaPalette, FaLayerGroup,
-  FaArrowDownUpAcrossLine, FaKeyboard, FaBolt,
+  FaArrowDownUpAcrossLine, FaKeyboard, FaBolt, FaClapperboard, FaSquarePlus,
 } from 'react-icons/fa6';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useEditor, MenuTab } from './EditorContext';
@@ -40,21 +40,25 @@ export const DesktopRail: React.FC = () => {
     { id: 'STYLE', label: 'Style', icon: <FaPalette size={16} />, needsObject: true },
     { id: 'ARRANGE', label: 'Arrange & align', shortcut: 'R', icon: <FaArrowDownUpAcrossLine size={16} />, needsObject: true },
     { id: 'LAYERS', label: 'Layers', shortcut: 'L', icon: <FaLayerGroup size={16} /> },
+    { id: 'DOCUMENT', label: 'Document size & aspect', icon: <FaClapperboard size={16} /> },
+    { id: 'BG', label: 'Background', shortcut: 'G', icon: <FaSquarePlus size={16} /> },
   ];
 
   return (
     <nav className="glass z-20 flex w-14 shrink-0 flex-col items-center gap-1 border-r border-white/10 py-3">
       {tools.map((t) => {
         const disabled = (t.needsImage && !isImage) || (t.needsObject && !hasObj);
-        const active = menu === t.id;
+        // SELECT maps to HOME (matches the V key); CROP never changes the menu
+        const active = t.id === 'SELECT' ? menu === 'HOME' : menu === t.id;
         const btn = (
           <button
             key={t.id}
             disabled={disabled}
             onClick={() => {
               t.onClick?.();
-              if (!t.onClick) setMenu(t.id as MenuTab);
-              else if (t.id !== 'DRAW') setMenu(t.id as MenuTab);
+              if (t.id === 'SELECT') setMenu('HOME');
+              else if (!t.onClick) setMenu(t.id as MenuTab);
+              else if (t.id !== 'DRAW' && t.id !== 'CROP') setMenu(t.id as MenuTab);
             }}
             aria-label={t.label}
             className={clsx(

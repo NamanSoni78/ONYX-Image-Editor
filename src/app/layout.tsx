@@ -20,6 +20,9 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // Required for env(safe-area-inset-*) to resolve in the installed iOS PWA
+  // (keeps the mobile toolbar and bottom sheets above the home indicator).
+  viewportFit: 'cover',
   themeColor: '#09090b',
 };
 

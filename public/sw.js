@@ -5,7 +5,7 @@
  * - Stale-while-revalidate for fonts
  * - Network-first with cache fallback for pages (offline editing)
  */
-const VERSION = 'onyx-v2.0.0';
+const VERSION = 'onyx-v2.1.0';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const FONT_CACHE = `${VERSION}-fonts`;
@@ -82,6 +82,9 @@ self.addEventListener('fetch', (event) => {
           if (cached) return cached;
           const shell = await caches.match('/editor');
           if (shell) return shell;
+          // Precached offline page as the last line of defense
+          const offline = await caches.match('/offline.html');
+          if (offline) return offline;
           return new Response('Offline', { status: 503, statusText: 'Offline' });
         })
     );

@@ -3,11 +3,6 @@ export interface WebSiteSchema {
   "@type": "WebSite";
   name: string;
   url: string;
-  potentialAction: {
-    "@type": "SearchAction";
-    target: string;
-    "query-input": string;
-  };
 }
 
 export interface OrganizationSchema {
@@ -100,11 +95,6 @@ export const generateWebSiteSchema = (): WebSiteSchema => ({
   "@type": "WebSite",
   name: "Onyx Image Editor",
   url: "https://onyx.namansoni.in",
-  potentialAction: {
-    "@type": "SearchAction",
-    target: "https://onyx.namansoni.in/search?q={search_term_string}",
-    "query-input": "required name=search_term_string",
-  },
 });
 
 export const generateOrganizationSchema = (): OrganizationSchema => ({
@@ -112,10 +102,10 @@ export const generateOrganizationSchema = (): OrganizationSchema => ({
   "@type": "Organization",
   name: "Onyx Image Editor",
   url: "https://onyx.namansoni.in",
-  logo: "https://onyx.namansoni.in/logo.png",
+  logo: "https://onyx.namansoni.in/icon-512.png",
   sameAs: [
-    "https://twitter.com/onyxeditor",
-    "https://github.com/namansoni/onyx",
+    "https://github.com/namansoni78",
+    "https://links.namansoni.in/namansoni78",
   ],
 });
 
@@ -188,7 +178,7 @@ export const generateArticleSchema = (post: any): ArticleSchema => ({
     name: "Onyx Image Editor",
     logo: {
       "@type": "ImageObject",
-      url: "https://onyx.namansoni.in/logo.png",
+      url: "https://onyx.namansoni.in/icon-512.png",
     },
   },
   datePublished: post.date,

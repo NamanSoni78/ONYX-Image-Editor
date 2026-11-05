@@ -232,7 +232,7 @@ export interface ShortcutDef {
 
 export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Ctrl+Z', action: 'Undo', group: 'Edit' },
-  { keys: 'Ctrl+Shift+Z', action: 'Redo', group: 'Edit' },
+  { keys: 'Ctrl+Shift+Z / Ctrl+Y', action: 'Redo', group: 'Edit' },
   { keys: 'Ctrl+D', action: 'Duplicate', group: 'Edit' },
   { keys: 'Ctrl+C / Ctrl+V', action: 'Copy / paste object', group: 'Edit' },
   { keys: 'Ctrl+A', action: 'Select all', group: 'Edit' },
@@ -240,6 +240,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Ctrl+S', action: 'Export image', group: 'File' },
   { keys: 'Ctrl+K', action: 'Command palette', group: 'File' },
   { keys: 'V', action: 'Select tool', group: 'Tools' },
+  { keys: 'I', action: 'Add image / layer', group: 'Tools' },
   { keys: 'T', action: 'Add text', group: 'Tools' },
   { keys: 'B', action: 'Draw tool', group: 'Tools' },
   { keys: 'S', action: 'Shapes', group: 'Tools' },
@@ -259,5 +260,5 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Arrow keys', action: 'Nudge 1px (Shift = 10px)', group: 'Edit' },
   { keys: '[ / ]', action: 'Send backward / forward', group: 'Edit' },
   { keys: '?', action: 'Shortcut cheat sheet', group: 'Help' },
-  { keys: 'Esc', action: 'Deselect / close panel', group: 'Help' },
+  { keys: 'Esc', action: 'Deselect / close panel / cancel mask', group: 'Help' },
 ];

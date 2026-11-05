@@ -1,7 +1,8 @@
-# ONYX v2.0 — Bugfixes & Breaking Changes
+# ONYX v2.1 — Bugfixes & Breaking Changes
 
 > Every defect found during the v2.0 audit (from v1 code or introduced & caught during v2 QA),
 > how it was fixed, and the breaking changes deployers must know about.
+> **v2.1**: section E lists the user-reported + parallel-subagent-hunted bugs fixed in the v2.1 round.
 
 ---
 
@@ -46,3 +47,80 @@
 - **Background-removal** is color-key based (RemoveColor) — ML-based removal is a future feature.
 - **History does not capture brush strokes individually** — each stroke lands as one `object:added` checkpoint (standard fabric behavior).
 - Vercel preview deployments must use the static output too — no server runtime is expected anywhere.
+
+## E. v2.1 round — user-reported + bug-hunt fixes (all browser-verified where marked ✅)
+
+### E1. User-reported bugs
+
+| # | Bug | Root cause | Fix |
+|---|-----|-----------|-----|
+| 1 | **Black background turned white behind the first imported image** (visible when moving it) | First import defined the doc but the frame kept its white fill | First import sets the doc background transparent (checkerboard) + serializable `onyxBgTransparent` flag ✅ |
+| 2 | **Keyboard Delete didn't delete the selected object (multi-select did nothing)** | `canvas.remove(activeSelection)` doesn't remove member objects in fabric v5 | `apiDeleteObjects` unwraps ActiveSelection members and removes them batched (one history entry) ✅ |
+| 3 | **Favicon** was the old generic one | — | User's ICO installed at `src/app/favicon.ico`; all PWA icons (192/512/maskable/apple-touch) regenerated from it |
+| 4 | **Footer** missing links | — | Home footer: See Other Apps → `links.namansoni.in/namansoni78`, Made With ❤️ By Naman + GitHub → `github.com/namansoni78`, Donate → `payment.namansoni.in/payment` (all `target=_blank rel=noopener`) ✅ |
+
+### E2. Parallel-subagent bug hunt (3 hunters: canvas core / export+panels / shell+mobile)
+
+**Critical**
+
+| # | Bug | Root cause | Fix |
+|---|-----|-----------|-----|
+| 5 | **"Transparent background" PNG export came out filled with the editor backdrop (#101013)** | `toCanvasElement` paints `canvas.backgroundColor` under everything; only the frame was hidden | `renderDocDataURL` clears `c.backgroundColor` during transparent capture, restores in `finally` ✅ |
+| 6 | **"To bottom" hid single objects (under the frame) and CORRUPTED multi-selects** (`splice(-1,1)` deleted the top object; ActiveSelection injected into the canvas stack) | `order('back')` mixed `getObjects()` copies, stale frame indexes and ActiveSelection handling | Live-`_objects` rewrite: single objects land just above the frame; ActiveSelection members are moved in order and re-selected ✅ |
+| 7 | **"New Project" from inside the editor kept autosaving into the OLD project** (same-route soft nav never re-initialized the canvas) | No remount on `?project` change | `EditorClient` remounts `CanvasEditor` via an epoch key on document switches — with an "adoption" exception so the first autosave of a scratch session (which rewrites the URL) does NOT remount/race the project write ✅ |
+| 8 | **Adoption race (found while fixing #7)**: keying on the raw URL made the first autosave of a scratch session remount the editor and load the just-created EMPTY project record — wiping the imported image | `createProject()` writes an empty record, then `replaceState` triggered the remount before `updateProject` committed | doSave marks `window.__onyxAdoptedPid` before `replaceState`; the wrapper keeps the epoch for that doc ✅ |
+| 9 | **JPG export after toggling "Transparent" produced a black-background JPEG** | The transparent flag survived the format switch | Flag reset on format change + engine-level guard (`transparent && format!=='jpeg'`) ✅ |
+
+**Major**
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 10 | **`sendBackwards` / Layers ↓ dropped the bottom-most layer below the frame (invisible)** | Member-wise backward move with floor = frameIdx+1 (single + multi-select) ✅ |
+| 11 | **Doc background changes weren't undoable/autosaved** | `setDocBackground` commits history ✅ |
+| 12 | **Background image was invisible** (canvas-level `backgroundImage` renders under the opaque frame) and not undoable | BG image is now a real cover-fit layer directly above the frame (`onyxBgImage`), visible + exportable + listed in Layers + rescales with doc resize; legacy saves are migrated on load; undoable ✅ |
+| 13 | **Transparent-doc detection used pattern-instance identity** — broke after every save/reload (checker baked into JPEG exports/thumbnails) | Serializable `onyxBgTransparent` flag (+ Pattern instanceof fallback) ✅ |
+| 14 | **CSS gradient angles were mirrored / corner keywords wrong** (`45deg` rendered down-right, `to top right` rendered straight up; `turn`/`rad` ignored) | Proper CSS semantics: keyword → direction vector, `deg` → `cssDeg − 90`, `turn`/`rad` conversion ✅ |
+| 15 | **Updating a border stack pushed spurious history entries** (one where the core object was missing) | The whole unwrap→re-wrap runs under `isLockedRef`; history commits after ✅ |
+| 16 | **Doc resize didn't rescale the frame gradient** (gradient only spanned the old area) | `applyDocSize` rebuilds the gradient via `buildFrameGradient(onyxBgCss, w, h)` |
+| 17 | **Export custom W/H inputs ate the first keystrokes** (typing "800" → the "8" vanished because 8 < 16 nulled the state) | Draft-string inputs committing on blur/Enter; ratio input normalized on blur ✅ |
+| 18 | **Stale mixed custom/ratio mode exported a dimension the UI never showed** | Missing side falls back to the doc dimension (aspect-derived when locked) ✅ |
+| 19 | **Border rings on scaled images used the natural pixel size** (3000×2000 rings around a 700px image) | Ring Rect carries `scaleX/scaleY = ringW/naturalW` ✅ |
+| 20 | **BorderStackBuilder kept the previous object's config** when selecting another bordered object | Re-seeds from the group's `onyxRingCfg` when the selection identity changes |
+| 21 | **Non-circle export masks were stretched** on non-square documents | `traceExportShape` inscribes every shape by `min(w,h)` (like circle) ✅ |
+| 22 | **Ctrl+Z/Y/S/K/D fired while typing in DOM inputs** (canvas undid, native input undo blocked) | `domTyping()` guard; fabric IText editing (hidden textarea) still allows canvas shortcuts; Space no longer swallows button activation ✅ |
+| 23 | **Mask tool unreachable on mobile** | Mask button added to the image group of the mobile toolbar ✅ |
+| 24 | **Existing text objects couldn't be re-formatted on mobile** (Text button always created a new object) | With an i-text selected the button opens the TEXT panel instead ✅ |
+| 25 | **Escape / sheet-Done during mask edit left the temp mask on canvas and the image locked** | Both paths call `finishMasking(false)` ✅ |
+| 26 | **`.onyx` re-import dropped `docW/docH`** (re-imported 1080×1920 story exported as 1080² square) | `importProject` persists doc dimensions ✅ |
+| 27 | **Native `confirm()`/`alert()` still used** (sidebar delete, dashboard import error) | In-drawer delete-confirm dialog; inline error banner ✅ |
+| 28 | **Gradient/pattern fills mis-detected** (`fill.type === 'gradient'` never matches — fabric v5 uses 'linear'/'radial' and Pattern has no type) | Structural detection (colorStops → gradient, source/repeat → pattern) ✅ |
+| 29 | **`viewportFit: cover` missing** → all safe-area insets dead code on iOS PWA | Added to the Viewport export |
+
+**Minor**
+
+| # | Bug | Fix |
+|---|-----| -----|
+| 30 | Arrange numeric inputs, flip, rename, layer visibility, gradient/solid fills weren't undoable | All commit history |
+| 31 | `docBg` UI state stale after undo/redo | `restoreEntry` re-derives it via `docBgFromFrame` ✅ |
+| 32 | "Gradient layer" in the Add panel dropped stops 3–5 and the direction | Uses `buildFrameGradient` (full CSS parsing) |
+| 33 | Gradient parser deduplicated repeated stop colors | Dropped the dedupe |
+| 34 | Export toast reported pre-cap dimensions (16K requests announced 16384 when capped) | `renderDocDataURL` returns the real `{url,w,h}` ✅ |
+| 35 | Layer lock didn't round-trip through save/reload | lock props added to `CANVAS_EXTRA_PROPS` |
+| 36 | "16K" chip capped at 32× (lied for docs < 512px) | Chip bypasses the manual-ratio clamp; pixel caps do the real limiting ✅ |
+| 37 | Fill sub-mode (solid/gradient/image chip) stale across selections | Reset on selection identity change |
+| 38 | Clicking the active BG chip re-applied the default color/gradient (destroying the user's custom value) | No-op when the kind already matches |
+| 39 | Border ramp sliders could invert (min > max) | Cross-clamped on change |
+| 40 | Document W/H inputs kept showing rejected values | Clamp instead of reject (16–6000) |
+| 41 | Desktop rail "Select"/"Crop" set non-existent `MenuTab` values (empty right panel) | Select → HOME; Crop doesn't change the menu ✅ |
+| 42 | CropModal Apply crashed before the cropper was ready (`getCroppedCanvas() → null`); no Escape | Null-guard + Escape listener + `role=dialog` ✅ |
+| 43 | JSON-LD pointed at nonexistent resources (SearchAction `/search`, `/logo.png`, wrong `sameAs`) | Dropped SearchAction; logo → `/icon-512.png`; sameAs → real profiles |
+| 44 | SW version stale (`onyx-v2.0.0`), `offline.html` never served, dead `resize/convert-presets.ts` libs | Version bumped to `onyx-v2.1.0`; offline page is the last navigate fallback; dead libs deleted |
+| 45 | `scrollbar-hide` class used but never defined (4 UI components) | Replaced with the defined `hide-scroll`; swatches became real `<button>`s |
+| 46 | Hover-only card/sidebar actions invisible on touch devices | `.touch-visible` utility (`@media (hover: none)` forces opacity) |
+| 47 | No file-size guard on import | Reject > 50 MB with a toast |
+| 48 | `I` (Add panel) and Ctrl+Y missing from the shortcuts cheat sheet; 2:3 ratio missing from EmptyState | All added |
+| 49 | **saveHistory() called while `isLockedRef` was true was a silent no-op** — deletes, border stacks, bg image set/remove never created history entries | History + autosave moved outside the lock in `apiDeleteObjects`, `applyBorderStack`, `removeBorderStack`, `handleBgInput`, `clearBgImage` ✅ |
+
+### E3. False alarms (investigated, not bugs)
+
+- `setLayerIndex` splice math (live `_objects`), image/pattern fill round-trip (fabric serializes pattern canvases to dataURL), gradient fill round-trip, polygon/star NaN guards (n≥3 clamps), undo/redo selection cleanup, clipboard PNG hardcode (panel blocks non-PNG copy), no retina double-scaling (`enableRetinaScaling:false`), footer URLs (byte-exact), favicon wiring (ICO + PNGs + manifest + apple-touch all present), v2.0→v2.1 project compatibility (extra props revive natively).

@@ -135,3 +135,38 @@ CanvasEditor (state + fabric logic, the only 'use client' engine)
 - [ ] `/blog`, `/compare`, `/tools/crop` return 404; `/`, `/tools`, `/editor` clean
 - [ ] Lighthouse-style sanity: no console errors, no CLS on home
 - [ ] `plan.md`, `worklog.md`, `bugfix.md`, `structure.md` complete and accurate
+
+---
+
+# v2.1 Round — Bug-fix + Feature Sprint
+
+> **Status:** Complete (all gates green, browser-verified)
+> **Scope:** Fix every user-reported bug, ship the requested feature set, then run MANDATORY parallel bug-hunt subagents and fix everything they find.
+
+## v2.1 Goals (all delivered)
+
+| # | Goal | Status |
+|---|------|--------|
+| V1 | First-import background transparent (no white behind moved images) | ✅ |
+| V2 | Keyboard Delete + multi-select delete | ✅ |
+| V3 | User favicon + regenerated PWA icons | ✅ |
+| V4 | Home footer: See Other Apps / Made by Naman + GitHub / Donate | ✅ |
+| V5 | Export: shape pick (mask-style), works in PNG | ✅ |
+| V6 | Export: exact-pixel resize, ratio default 1, aspect locked by default, user-unlockable | ✅ |
+| V7 | Export: up to 16K×16K (device caps 16 384 px / 268 MP) | ✅ |
+| V8 | Layers: slider to adjust layer index | ✅ |
+| V9 | Custom n-sided polygon shapes (+ stars) | ✅ |
+| V10 | Border stacks: n borders, gradient thickness ramp, gradient colors, per-border custom colors | ✅ |
+| V11 | Border radius control | ✅ |
+| V12 | Shape fills: custom image / gradient / tri-gradient | ✅ |
+| V13 | Background: change color / gradient / image | ✅ |
+| V14 | Proper aspect-ratio management at creation + after | ✅ |
+| V15 | Parallel bug-hunt subagents after implementation | ✅ (3 hunters → 49 fixes, bugfix.md §E) |
+
+## v2.1 Process
+
+1. Fixed the 4 user-reported bugs first (browser-verified one by one).
+2. Implemented features V5–V14 (export engine rewrite, shape/fill/border systems, bg layers, layer slider).
+3. Dispatched 3 parallel bug-hunt subagents (canvas core / export+panels / shell+mobile+docs).
+4. Fixed all critical/major/minor findings — including two races the hunters' findings exposed during verification (scratch-adoption remount race, saveHistory-inside-lock no-ops).
+5. Re-verified every critical path in the browser (pixel analysis on real exports).

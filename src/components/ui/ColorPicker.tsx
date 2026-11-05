@@ -10,33 +10,38 @@ const COLORS = ['#ffffff', '#000000', '#ef4444', '#f97316', '#eab308', '#22c55e'
 
 export const ColorPicker: React.FC<ColorPickerProps> = ({ selected, onChange }) => {
   return (
-    <div className="flex gap-2 overflow-x-auto py-2 scrollbar-hide">
+    <div className="flex gap-2 overflow-x-auto py-2 hide-scroll" role="group" aria-label="Color picker">
       {/* Custom Color Picker */}
-      <div className="w-8 h-8 rounded-full border border-white/20 relative overflow-hidden flex-shrink-0 group">
+      <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-full border border-white/20">
         <input
           type="color"
-          className="opacity-0 w-full h-full absolute inset-0 cursor-pointer z-10"
+          aria-label="Custom color"
+          className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
           onChange={(e) => onChange(e.target.value)}
         />
-        <div className="absolute inset-0 flex items-center justify-center bg-zinc-900 group-hover:bg-zinc-800 transition-colors">
+        <div className="absolute inset-0 flex items-center justify-center bg-zinc-900 transition-colors group-hover:bg-zinc-800">
           <FaEyeDropper className="text-xs text-white" />
         </div>
       </div>
 
       {/* Transparent */}
-      <div
+      <button
+        type="button"
         onClick={() => onChange('transparent')}
-        className="w-8 h-8 rounded-full border border-white/20 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')] flex-shrink-0 cursor-pointer"
-      ></div>
+        aria-label="Transparent"
+        className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-full border border-white/20 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')]"
+      />
 
       {/* Presets */}
-      {COLORS.map(c => (
-        <div
+      {COLORS.map((c) => (
+        <button
+          type="button"
           key={c}
           onClick={() => onChange(c)}
-          className={`w-8 h-8 rounded-full flex-shrink-0 border-2 cursor-pointer transition-all ${selected === c ? 'border-blue-500 scale-110' : 'border-transparent hover:border-white/30'}`}
+          aria-label={`Color ${c}`}
+          className={`h-8 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 transition-all ${selected === c ? 'scale-110 border-blue-500' : 'border-transparent hover:border-white/30'}`}
           style={{ backgroundColor: c }}
-        ></div>
+        />
       ))}
     </div>
   );

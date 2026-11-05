@@ -79,6 +79,14 @@ body {
     display: none;
   }
 
+  /* Hover-revealed actions must stay visible on touch devices (no hover) */
+  @media (hover: none) {
+    .touch-visible {
+      opacity: 1 !important;
+      pointer-events: auto;
+    }
+  }
+
   .safe-area-pb {
     padding-bottom: env(safe-area-inset-bottom);
   }

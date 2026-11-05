@@ -69,7 +69,7 @@ export const TOOLS: ToolInfo[] = [
   {
     slug: 'export',
     title: 'Powerful export',
-    description: 'PNG with transparency, JPG with quality control, WebP, 0.5×–3× scaling, and copy-to-clipboard.',
+    description: 'PNG with transparency, JPG with quality control, WebP, 0.5×–4× scaling, exact-pixel resize with aspect lock, shape-cropped exports and up to 16K resolution.',
     icon: 'convert',
   },
   {

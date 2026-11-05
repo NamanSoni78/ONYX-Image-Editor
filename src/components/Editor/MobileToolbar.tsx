@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import {
   FaPlus, FaFont, FaShapes, FaPen, FaFaceSmile, FaLayerGroup, FaCropSimple,
   FaSliders, FaWandMagicSparkles, FaPalette, FaTrashCan, FaArrowDownUpAcrossLine,
-  FaArrowLeft, FaClone,
+  FaArrowLeft, FaClone, FaClapperboard, FaMask,
 } from 'react-icons/fa6';
 import { useEditor, MenuTab } from './EditorContext';
 
@@ -45,9 +45,10 @@ const Btn: React.FC<{
  * Object-specific tools appear contextually when something is selected.
  */
 export const MobileToolbar: React.FC = () => {
-  const { menu, setMenu, setSubTool, activeObj, addText, toggleDraw, startCrop, isDrawing, duplicate, deleteSelected } = useEditor();
+  const { menu, setMenu, setSubTool, activeObj, addText, toggleDraw, startCrop, isDrawing, duplicate, deleteSelected, finishMasking } = useEditor();
 
   const isImage = activeObj?.type === 'image';
+  const isText = activeObj?.type === 'i-text' || activeObj?.type === 'text';
   const hasObj = !!activeObj;
   const sheetOpen = menu !== 'HOME' && menu !== 'EXPORT' && menu !== 'LAYERS';
   const m: string = menu; // widen for TS-friendly comparisons below
@@ -57,6 +58,15 @@ export const MobileToolbar: React.FC = () => {
     setMenu(tab);
   };
 
+  const done = () => {
+    // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
+    if (menu === 'MASK_EDIT') finishMasking(false);
+    else {
+      setMenu('HOME');
+      setSubTool(null);
+    }
+  };
+
   return (
     <div className="glass z-30 shrink-0 border-t border-white/10 safe-area-pb">
       {/* Sheet handle row */}
@@ -64,10 +74,7 @@ export const MobileToolbar: React.FC = () => {
         <div className="flex items-center justify-between px-4 pb-0.5 pt-2">
           <div className="h-1 w-10 rounded-full bg-white/20" />
           <button
-            onClick={() => {
-              setMenu('HOME');
-              setSubTool(null);
-            }}
+            onClick={done}
             className="flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-[11px] font-bold text-zinc-300"
           >
             <FaArrowLeft size={10} /> Done
@@ -77,21 +84,32 @@ export const MobileToolbar: React.FC = () => {
 
       <div className="mask-fade-x flex items-center gap-0.5 overflow-x-auto px-2 py-1.5 hide-scroll">
         {sheetOpen ? (
-          <Btn icon={<FaArrowLeft />} label="Done" onClick={() => { setMenu('HOME'); setSubTool(null); }} active />
+          <Btn icon={<FaArrowLeft />} label="Done" onClick={done} active />
         ) : (
           <>
             <Btn icon={<FaPlus />} label="Add" onClick={() => open('ADD')} active={m === 'ADD'} />
-            <Btn icon={<FaFont />} label="Text" onClick={() => { addText(); }} />
+            <Btn
+              icon={<FaFont />}
+              label={isText ? 'Text' : 'Add text'}
+              onClick={() => {
+                // with a text selected → format it; otherwise create a new one
+                if (isText) open('TEXT');
+                else addText();
+              }}
+              active={m === 'TEXT'}
+            />
             <Btn icon={<FaShapes />} label="Shape" onClick={() => open('SHAPE')} active={m === 'SHAPE'} />
             <Btn icon={<FaPen />} label="Draw" onClick={toggleDraw} active={isDrawing} />
             <Btn icon={<FaFaceSmile />} label="Sticker" onClick={() => open('STICKER')} active={m === 'STICKER'} />
             <Btn icon={<FaLayerGroup />} label="Layers" onClick={() => open('LAYERS')} active={m === 'LAYERS'} />
+            <Btn icon={<FaClapperboard />} label="Doc" onClick={() => open('DOCUMENT')} active={m === 'DOCUMENT'} />
             <Btn icon={<FaPalette />} label="Bg" onClick={() => open('BG')} active={m === 'BG'} />
 
             {isImage && (
               <>
                 <span className="mx-1 h-9 w-px shrink-0 bg-white/10" />
                 <Btn icon={<FaCropSimple />} label="Crop" onClick={startCrop} />
+                <Btn icon={<FaMask />} label="Mask" onClick={() => open('MASK')} active={m === 'MASK'} />
                 <Btn icon={<FaSliders />} label="Adjust" onClick={() => open('ADJUST')} active={m === 'ADJUST'} />
                 <Btn icon={<FaWandMagicSparkles />} label="Filter" onClick={() => open('FILTER')} active={m === 'FILTER'} />
               </>

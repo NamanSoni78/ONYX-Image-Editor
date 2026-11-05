@@ -103,6 +103,9 @@ export const CommandPalette: React.FC<{ open: boolean; onClose: () => void }> = 
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       className="fixed inset-0 z-[115] flex items-start justify-center bg-black/70 p-4 pt-[12vh] backdrop-blur-sm"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >

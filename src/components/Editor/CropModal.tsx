@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Cropper, { ReactCropperElement } from 'react-cropper';
 import 'cropperjs/dist/cropper.css';
 import clsx from 'clsx';
@@ -25,15 +25,30 @@ export const CropModal: React.FC<CropModalProps> = ({ src, onCancel, onCrop }) =
   const cropperRef = useRef<ReactCropperElement>(null);
   const [ratio, setRatio] = useState<number>(NaN);
 
+  // Escape cancels the crop (every other overlay closes on Esc too)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onCancel]);
+
   const handleCrop = () => {
     const cropper = cropperRef.current?.cropper;
     if (cropper) {
-      onCrop(cropper.getCroppedCanvas().toDataURL('image/png'));
+      // getCroppedCanvas() returns null while the image is still loading
+      const cv = cropper.getCroppedCanvas();
+      if (!cv || !cv.width) return;
+      onCrop(cv.toDataURL('image/png'));
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex flex-col bg-black">
+    <div role="dialog" aria-modal="true" aria-label="Crop image" className="fixed inset-0 z-[120] flex flex-col bg-black">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/10 px-3">
         <span className="text-xs font-black uppercase tracking-[0.14em] text-zinc-300">Crop image</span>
         <div className="flex items-center gap-2">

@@ -42,6 +42,9 @@ export const Modal: React.FC<ModalProps> = ({ open, onClose, title, subtitle, ch
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={title || 'Dialog'}
           className="fixed inset-0 z-[110] flex items-end justify-center bg-black/70 backdrop-blur-sm md:items-center md:p-6"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) onClose();

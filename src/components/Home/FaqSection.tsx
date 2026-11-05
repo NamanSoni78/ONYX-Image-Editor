@@ -16,7 +16,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: 'What formats can I export?',
-    a: 'PNG (with optional transparency), JPG (with quality control), and WebP where your browser supports it — at 0.5× up to 3× scale.',
+    a: 'PNG (with optional transparency), JPG (with quality control), and WebP where your browser supports it — from 0.5× up to 4×, exact-pixel resize with aspect lock, circle/star/heart… shape exports, and up to 16K resolution.',
   },
   {
     q: 'Do I lose my work if I close the tab?',

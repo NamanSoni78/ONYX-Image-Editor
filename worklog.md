@@ -89,3 +89,43 @@
 
 - `plan.md`, `worklog.md` (this file), `bugfix.md`, `structure.md`, README v2.0.
 - Final zip packaged for delivery.
+
+---
+
+# v2.1 Round — Bug-fix + Feature Sprint (user-reported + subagent bug hunt)
+
+## Phase 8 — User-reported bug fixes
+
+- **First-import background**: doc adopts the image and starts transparent (checkerboard) — no white flash behind moved imports. Browser-verified via pixel analysis (dark checker exposed behind the moved photo).
+- **Delete key**: single + multi-select deletion fixed for fabric v5 (ActiveSelection members removed batched, one history entry). Verified: Ctrl+A → Delete → empty state; Ctrl+Z restores everything.
+- **Favicon**: user's ICO installed (`src/app/favicon.ico`); all PWA icons (192/512/maskable/apple-touch) regenerated from it.
+- **Home footer**: See Other Apps (`links.namansoni.in/namansoni78`) · Made With ❤️ By Naman + GitHub (`github.com/namansoni78`) · Donate (`payment.namansoni.in/payment`) — verified byte-exact with correct `target=_blank rel=noopener noreferrer`.
+
+## Phase 9 — v2.1 features
+
+- **Export**: shape pick (full/circle/round/triangle/star/heart/hex/penta/diamond mask, PNG transparency outside the shape, JPG white fill), exact-pixel resize with aspect lock (lockable, re-lock snaps H to W's aspect), ratio input, 0.5–4× chips + 16K chip (16 384 px / 268 MP device caps; toast reports the real capped size).
+- **Shapes**: n-sided polygon + n-point star generators; border-radius slider (rect).
+- **Border stacks**: 1–6 concentric borders, gradient ramp (thin→thick, colorA→colorB) or per-border color+width; gap control; wrap/unwrap as a group ("· bordered" layer); rings match scaled images.
+- **Fills**: solid / gradient (CSS parsing, up to 5 stops, angle presets 45°/-45°) / tri-gradient+ / image cover-fill on any shape or text.
+- **Document background**: color / gradient / transparent / image (cover-fit layer above the frame, listed in Layers, rescales with doc resize, migrates legacy canvas.backgroundImage saves on load).
+- **Layers panel**: position slider (0=bottom ↔ top) + arrows + inline rename; index round-trips through setLayerIndex.
+- **Aspect management**: Document panel W/H with lock + chips (1:1/4:5/3:2/2:3/16:9/9:16) + presets; content stays centered on resize; EmptyState ratio chips.
+
+## Phase 10 — Parallel bug-hunt subagents (3 hunters) + fixes
+
+Dispatched 3 general-purpose subagents in parallel (canvas core / export+panels / shell+mobile+docs). They returned 40+ real findings; all critical + major + minor fixed (see bugfix.md §E for the full table). Highlights:
+
+- Transparent PNG export filled with the editor backdrop → backgroundColor cleared during capture.
+- "To bottom" data loss + hidden objects → live-`_objects` reorder with frame floor; multi-safe.
+- New Project kept autosaving into the old project → epoch-keyed remount, with an "adoption" exception (first autosave of a scratch session rewrites the URL without remounting — otherwise the fresh record race WIPED the user's import; found + fixed during verification).
+- `saveHistory()` inside the `isLockedRef` lock was a silent no-op → history/autosave moved outside the lock (deletes, border stacks, bg image ops now truly undoable).
+- CSS gradient angle semantics (45deg mirrored, corner keywords, turn/rad).
+- Ctrl+Z/Y/S/K/D suppressed while typing in DOM inputs (fabric IText still works).
+- Mobile: Mask button, re-format existing text, mask-edit cleanup on Done/Esc.
+- Export UX: draft inputs (no eaten keystrokes), stale-mode fallbacks, 16K clamp bypass.
+- Shell: viewportFit cover, JSON-LD fixes, SW v2.1.0 + offline fallback, touch-visible hover actions, dialog roles, a11y swatch buttons, 50 MB import guard.
+
+## Phase 11 — Verification (all green)
+
+- `tsc --noEmit` → 0 errors · ESLint (React Compiler rules) → 0 errors · `next build` → 4/4 static routes.
+- Browser regression (agent-browser + pixel analysis), all ✅: transparent PNG corners [0,0,0,0]; JPG white (not black) with transparent on; To-bottom/backward visibility; bg image layer visible + exported + undoable; doc bg color undo + panel state sync; 45° gradient direction; triangle mask inscribed (not stretched) on 3:2; ring group 744×511 around a 700px image; custom W/H typing; Ctrl+Z-in-input guard; New Project fresh editor (project + scratch paths); adoption race (image + pattern frame + docW survive); multi-select delete + undo.

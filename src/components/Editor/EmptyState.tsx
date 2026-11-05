@@ -63,6 +63,31 @@ export const EmptyState: React.FC = () => {
             ))}
           </div>
 
+          <div className="flex flex-wrap justify-center gap-1.5">
+            <span className="py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-600">Ratio</span>
+            {([
+              ['1:1', 1], ['4:5', 4 / 5], ['3:2', 3 / 2], ['2:3', 2 / 3], ['16:9', 16 / 9], ['9:16', 9 / 16],
+            ] as [string, number][]).map(([label, r]) => {
+              const long = 1080;
+              const w = r >= 1 ? long : Math.round(long * r);
+              const h = r >= 1 ? Math.round(long / r) : long;
+              return (
+                <button
+                  key={label}
+                  onClick={() => setDocSize(w, h)}
+                  className={clsx(
+                    'focus-ring rounded-lg border px-2.5 py-1 font-mono text-[11px] font-bold transition-all active:scale-95',
+                    docSize.width === w && docSize.height === h
+                      ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200'
+                      : 'border-white/10 bg-zinc-800/50 text-zinc-300 hover:border-white/25'
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
           {!isDefault && (
             <p className="pt-1 font-mono text-[10px] text-zinc-500">
               Canvas ready: {docSize.width} × {docSize.height} px

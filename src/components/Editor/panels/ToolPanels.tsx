@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
   FaBold, FaItalic, FaUnderline, FaAlignLeft, FaAlignCenter, FaAlignRight,
@@ -8,11 +8,12 @@ import {
   FaArrowsLeftRight, FaArrowsUpDown, FaArrowRotateLeft, FaArrowRotateRight,
   FaCheck, FaXmark, FaImage, FaPlus, FaCropSimple, FaEyeDropper,
   FaSquare, FaCircle, FaPlay, FaMagnifyingGlass, FaTrashCan, FaClone,
+  FaLockOpen, FaUpload, FaLayerGroup,
 } from 'react-icons/fa6';
 import { Slider } from '@/components/ui/Slider';
 import { ColorPicker } from '@/components/ui/ColorPicker';
 import { GradientPicker } from '@/components/ui/GradientPicker';
-import { useEditor } from '../EditorContext';
+import { useEditor, BorderStackConfig } from '../EditorContext';
 import {
   ADJUSTMENTS, FILTER_PRESETS, STICKERS, FONTS, DOC_PRESETS,
 } from '../constants';
@@ -150,13 +151,49 @@ const AddPanel: React.FC = () => {
 
 const DocumentPanel: React.FC = () => {
   const { docSize, setDocSize, zoomFit } = useEditor();
+  const [locked, setLocked] = useState(true);
+  const ratio = docSize.width / docSize.height;
+
+  // Clamp instead of reject — a rejected commit would leave the input showing a
+  // value the document never took (uncontrolled input + stable key).
+  const clampDoc = (v: number) => Math.max(16, Math.min(6000, Math.round(v)));
+  const setW = (v: number) => setDocSize(clampDoc(v), locked ? clampDoc(v / ratio) : docSize.height);
+  const setH = (v: number) => setDocSize(locked ? clampDoc(v * ratio) : docSize.width, clampDoc(v));
+
+  const ASPECTS: { label: string; r: number }[] = [
+    { label: '1:1', r: 1 },
+    { label: '4:5', r: 4 / 5 },
+    { label: '3:2', r: 3 / 2 },
+    { label: '2:3', r: 2 / 3 },
+    { label: '16:9', r: 16 / 9 },
+    { label: '9:16', r: 9 / 16 },
+  ];
+  const applyAspect = (r: number) => {
+    const longEdge = Math.max(docSize.width, docSize.height);
+    const w = r >= 1 ? longEdge : Math.round(longEdge * r);
+    const h = r >= 1 ? Math.round(longEdge / r) : longEdge;
+    setDocSize(w, h);
+  };
+
   return (
     <div className="space-y-5">
       <div>
         <Label>Canvas size</Label>
         <div className="flex items-center gap-2">
-          <NumInput label="W" value={docSize.width} onCommit={(v) => setDocSize(v, docSize.height)} />
-          <NumInput label="H" value={docSize.height} onCommit={(v) => setDocSize(docSize.width, v)} />
+          <NumInput label="W" value={docSize.width} onCommit={setW} />
+          <button
+            onClick={() => setLocked((l) => !l)}
+            title={locked ? 'Aspect ratio locked — W and H stay in sync' : 'Aspect ratio free'}
+            className={clsx(
+              'focus-ring shrink-0 rounded-md border p-2 transition-colors',
+              locked
+                ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-300'
+                : 'border-white/10 bg-zinc-800/70 text-zinc-500 hover:text-white'
+            )}
+          >
+            {locked ? <FaLock size={11} /> : <FaLockOpen size={11} />}
+          </button>
+          <NumInput label="H" value={docSize.height} onCommit={setH} />
           <button
             onClick={zoomFit}
             title="Fit to screen"
@@ -164,6 +201,26 @@ const DocumentPanel: React.FC = () => {
           >
             <FaMagnifyingGlass size={12} />
           </button>
+        </div>
+        <p className="mt-1.5 text-[10px] text-zinc-500">Content stays centered when the canvas is resized.</p>
+      </div>
+      <div>
+        <Label>Aspect ratio</Label>
+        <div className="flex gap-1.5">
+          {ASPECTS.map((a) => (
+            <button
+              key={a.label}
+              onClick={() => applyAspect(a.r)}
+              className={clsx(
+                'focus-ring flex-1 rounded-lg border py-2 font-mono text-[11px] font-bold transition-all active:scale-95',
+                Math.abs(ratio - a.r) < 0.01
+                  ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-200'
+                  : 'border-white/10 bg-zinc-800/50 text-zinc-300 hover:border-white/25'
+              )}
+            >
+              {a.label}
+            </button>
+          ))}
         </div>
       </div>
       <div>
@@ -191,15 +248,32 @@ const DocumentPanel: React.FC = () => {
 };
 
 const BgPanel: React.FC = () => {
-  const { docBg, setDocBackground, openBgPicker } = useEditor();
+  const { docBg, setDocBackground, openBgPicker, clearBgImage } = useEditor();
   return (
     <div className="space-y-5">
       <div>
         <Label>Type</Label>
         <div className="flex gap-2">
-          <Chip active={docBg.kind === 'color'} onClick={() => setDocBackground({ kind: 'color', value: '#ffffff' })}>Color</Chip>
-          <Chip active={docBg.kind === 'gradient'} onClick={() => setDocBackground({ kind: 'gradient', value: 'linear-gradient(to right, #6366f1, #a855f7)' })}>Gradient</Chip>
-          <Chip active={docBg.kind === 'transparent'} onClick={() => setDocBackground({ kind: 'transparent' })}>Transparent</Chip>
+          {/* clicking the already-active chip is a no-op — re-applying the default
+              would silently destroy the user's custom color/gradient */}
+          <Chip
+            active={docBg.kind === 'color'}
+            onClick={() => docBg.kind !== 'color' && setDocBackground({ kind: 'color', value: '#ffffff' })}
+          >
+            Color
+          </Chip>
+          <Chip
+            active={docBg.kind === 'gradient'}
+            onClick={() => docBg.kind !== 'gradient' && setDocBackground({ kind: 'gradient', value: 'linear-gradient(to right, #6366f1, #a855f7)' })}
+          >
+            Gradient
+          </Chip>
+          <Chip
+            active={docBg.kind === 'transparent'}
+            onClick={() => docBg.kind !== 'transparent' && setDocBackground({ kind: 'transparent' })}
+          >
+            Transparent
+          </Chip>
         </div>
       </div>
       {docBg.kind === 'color' && (
@@ -210,23 +284,32 @@ const BgPanel: React.FC = () => {
       )}
       {docBg.kind === 'gradient' && (
         <div>
-          <Label>Gradient</Label>
+          <Label>Gradient — presets &amp; custom (up to 5 stops)</Label>
           <GradientPicker selected={docBg.value} onChange={(g) => setDocBackground({ kind: 'gradient', value: g })} onCustomGradient={() => {}} />
         </div>
       )}
       {docBg.kind === 'transparent' && (
         <p className="rounded-lg border border-white/10 bg-zinc-800/40 px-3 py-2 text-[11px] text-zinc-400">
-          Checkerboard = transparent. Export as <strong>PNG</strong> with “Transparent background” to keep it.
+          Checkerboard = transparent. Export as <strong>PNG</strong> to keep it — JPG fills white.
         </p>
       )}
       <div>
         <Label>Image background</Label>
-        <button
-          onClick={openBgPicker}
-          className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-800/70 py-3 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
-        >
-          <FaPlus /> Upload image (cover)
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={openBgPicker}
+            className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg bg-zinc-800/70 py-3 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
+          >
+            <FaUpload /> Upload (cover)
+          </button>
+          <button
+            onClick={clearBgImage}
+            title="Remove background image"
+            className="focus-ring flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-800/70 px-3.5 py-3 text-xs font-bold text-zinc-400 transition-colors hover:border-red-500/30 hover:text-red-400"
+          >
+            <FaTrashCan /> Remove
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -294,24 +377,63 @@ const TextPanel: React.FC = () => {
 };
 
 const ShapePanel: React.FC = () => {
-  const { addShape } = useEditor();
+  const { addShape, addPolygon } = useEditor();
+  const [sides, setSides] = useState(6);
+  const [star, setStar] = useState(false);
+
   const items = [
-    { key: 'rect' as const, icon: <FaSquare className="text-xl" />, label: 'Rect' },
-    { key: 'circle' as const, icon: <FaCircle className="text-xl" />, label: 'Circle' },
-    { key: 'tri' as const, icon: <FaPlay className="-rotate-90 text-xl" />, label: 'Triangle' },
+    { key: 'rect' as const, icon: <FaSquare className="text-xl" />, label: 'Rect', onClick: () => addShape('rect') },
+    { key: 'circle' as const, icon: <FaCircle className="text-xl" />, label: 'Circle', onClick: () => addShape('circle') },
+    { key: 'tri' as const, icon: <FaPlay className="-rotate-90 text-xl" />, label: 'Triangle', onClick: () => addShape('tri') },
+    { key: 'pentagon' as const, icon: <span className="text-2xl leading-none">⬠</span>, label: 'Pentagon', onClick: () => addPolygon(5) },
+    { key: 'hexagon' as const, icon: <span className="text-2xl leading-none">⬡</span>, label: 'Hexagon', onClick: () => addPolygon(6) },
+    { key: 'star' as const, icon: <span className="text-2xl leading-none">⭐</span>, label: 'Star 5', onClick: () => addPolygon(5, true) },
   ];
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {items.map((it) => (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-2">
+        {items.map((it) => (
+          <button
+            key={it.key}
+            onClick={it.onClick}
+            className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-4 text-zinc-300 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
+          >
+            {it.icon}
+            <span className="text-[10px] font-bold uppercase tracking-wide">{it.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-zinc-800/40 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Custom polygon</span>
+          <button
+            onClick={() => setStar((s) => !s)}
+            className={clsx(
+              'focus-ring rounded-full border px-2.5 py-1 text-[10px] font-bold transition-colors',
+              star ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-300' : 'border-white/10 bg-zinc-800/70 text-zinc-400'
+            )}
+          >
+            {star ? '★ star' : '⬡ polygon'}
+          </button>
+        </div>
+        <Slider
+          label="Sides"
+          value={sides}
+          min={3}
+          max={20}
+          step={1}
+          defaultVal={6}
+          format={(v) => String(Math.round(v))}
+          onChange={(v) => setSides(v)}
+        />
         <button
-          key={it.key}
-          onClick={() => addShape(it.key)}
-          className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-4 text-zinc-300 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
+          onClick={() => addPolygon(sides, star)}
+          className="focus-ring mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient py-2.5 text-xs font-bold text-white transition-transform active:scale-[0.98]"
         >
-          {it.icon}
-          <span className="text-[10px] font-bold uppercase tracking-wide">{it.label}</span>
+          <FaPlus /> Add {star ? `${Math.round(sides)}-point star` : `${Math.round(sides)}-sided polygon`}
         </button>
-      ))}
+      </div>
     </div>
   );
 };
@@ -618,21 +740,212 @@ const ArrangePanel: React.FC = () => {
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Border stack builder (fancy multi-borders)                          */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_BORDER_CFG: BorderStackConfig = {
+  count: 3,
+  mode: 'gradient',
+  colorA: '#6366f1',
+  colorB: '#22d3ee',
+  widthMin: 2,
+  widthMax: 10,
+  gap: 4,
+};
+
+const BorderStackBuilder: React.FC = () => {
+  const { activeObj, applyBorderStack, removeBorderStack } = useEditor();
+  const isRingGroup = activeObj?.type === 'group' && !!(activeObj as any).onyxRing;
+  const seed: BorderStackConfig = isRingGroup ? (activeObj as any).onyxRingCfg : DEFAULT_BORDER_CFG;
+  const [cfg, setCfg] = useState<BorderStackConfig>({ ...seed });
+  // Re-seed when a DIFFERENT ring group is selected — otherwise "Update" would
+  // apply the previous object's config. Plain objects keep the current tweaks.
+  const [lastObj, setLastObj] = useState<fabric.Object | undefined | null>(activeObj);
+  if (activeObj !== lastObj) {
+    setLastObj(activeObj);
+    if (activeObj?.type === 'group' && (activeObj as any).onyxRing) {
+      setCfg({ ...(activeObj as any).onyxRingCfg });
+    }
+  }
+  const [open, setOpen] = useState(false);
+
+  const patch = (p: Partial<BorderStackConfig>) => setCfg((c) => ({ ...c, ...p }));
+  const patchRing = (i: number, p: Partial<{ width: number; color: string }>) =>
+    setCfg((c) => {
+      const rings = [...(c.rings || [])];
+      while (rings.length < c.count) rings.push({ width: 6, color: '#ffffff' });
+      rings[i] = { ...rings[i], ...p };
+      return { ...c, rings };
+    });
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-zinc-800/40 p-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="focus-ring flex w-full items-center justify-between text-left"
+      >
+        <span className="flex items-center gap-2 text-xs font-bold text-zinc-200">
+          <FaLayerGroup size={11} className="text-indigo-300" />
+          Border stack {isRingGroup && <span className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-[9px] font-bold text-indigo-300">editing</span>}
+        </span>
+        <span className="text-[10px] font-bold text-zinc-500">{open ? 'hide ▲' : 'multi-border ▼'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-4">
+          <Slider
+            label="Borders"
+            value={cfg.count}
+            min={1}
+            max={6}
+            step={1}
+            defaultVal={3}
+            format={(v) => String(Math.round(v))}
+            onChange={(v) => patch({ count: v })}
+          />
+          <div className="flex gap-2">
+            <Chip active={cfg.mode === 'gradient'} onClick={() => patch({ mode: 'gradient' })}>Gradient ramp</Chip>
+            <Chip active={cfg.mode === 'custom'} onClick={() => patch({ mode: 'custom' })}>Per-border</Chip>
+          </div>
+
+          {cfg.mode === 'gradient' ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Inner color</Label>
+                  <ColorPicker selected={cfg.colorA} onChange={(c) => patch({ colorA: c })} />
+                </div>
+                <div>
+                  <Label>Outer color</Label>
+                  <ColorPicker selected={cfg.colorB} onChange={(c) => patch({ colorB: c })} />
+                </div>
+              </div>
+              <Slider
+                label="Thin → thick ramp"
+                value={cfg.widthMin}
+                min={1}
+                max={20}
+                step={1}
+                defaultVal={2}
+                format={(v) => `${Math.round(v)}px`}
+                onChange={(v) => patch({ widthMin: v, widthMax: Math.max(v, cfg.widthMax) })}
+              />
+              <Slider
+                label="Outer thickness"
+                value={cfg.widthMax}
+                min={1}
+                max={30}
+                step={1}
+                defaultVal={10}
+                format={(v) => `${Math.round(v)}px`}
+                onChange={(v) => patch({ widthMax: v, widthMin: Math.min(v, cfg.widthMin) })}
+              />
+            </>
+          ) : (
+            <div className="space-y-2">
+              <Label>Each border</Label>
+              {Array.from({ length: Math.round(cfg.count) }).map((_, i) => {
+                const ring = cfg.rings?.[i] || { width: 6, color: '#ffffff' };
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-4 text-[10px] font-bold text-zinc-500">{i + 1}</span>
+                    <input
+                      type="color"
+                      value={ring.color}
+                      onChange={(e) => patchRing(i, { color: e.target.value })}
+                      className="h-7 w-9 cursor-pointer rounded-md border border-white/10 bg-transparent p-0.5"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={Math.round(ring.width)}
+                      onChange={(e) => patchRing(i, { width: Math.max(1, parseInt(e.target.value) || 1) })}
+                      className="focus-ring w-16 rounded-md border border-white/10 bg-zinc-800/70 px-2 py-1 font-mono text-[11px] text-zinc-100 outline-none focus:border-indigo-400/50"
+                    />
+                    <span className="text-[10px] text-zinc-500">px</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <Slider label="Gap between borders" value={cfg.gap} min={0} max={24} step={1} defaultVal={4} format={(v) => `${Math.round(v)}px`} onChange={(v) => patch({ gap: v })} />
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => applyBorderStack(cfg)}
+              className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient py-2.5 text-xs font-bold text-white transition-transform active:scale-[0.98]"
+            >
+              <FaCheck /> {isRingGroup ? 'Update' : 'Apply'}
+            </button>
+            {isRingGroup && (
+              <button
+                onClick={removeBorderStack}
+                className="focus-ring flex items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs font-bold text-red-400 hover:bg-red-500/20"
+              >
+                <FaTrashCan /> Remove
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+            Borders wrap the object as one layer — remove them anytime to edit the original.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const StylePanel: React.FC = () => {
-  const { activeObj, editorState, subTool, setSubTool, updateStyle, commitHistory } = useEditor();
+  const {
+    activeObj, editorState, subTool, setSubTool, updateStyle, commitHistory,
+    setObjectGradientFill, setObjectImageFill, setObjectSolidFill,
+  } = useEditor();
+  const imgFillRef = useRef<HTMLInputElement>(null);
   if (!activeObj) {
     return <p className="py-6 text-center text-xs text-zinc-500">Select an object to style it.</p>;
   }
-  const isShape = ['rect', 'circle', 'triangle'].includes(activeObj.type || '');
+  const isShape = ['rect', 'circle', 'triangle', 'polygon'].includes(activeObj.type || '');
   const isText = activeObj.type === 'i-text' || activeObj.type === 'text';
+  const fillable = isShape || isText;
+  // fabric v5: Gradient.type is 'linear'|'radial' and Pattern has NO type field —
+  // detect by structure (colorStops / source+repeat) instead of a .type string.
+  const rawFill: any = (activeObj as any).fill;
+  const fillMode: 'solid' | 'gradient' | 'image' =
+    rawFill && typeof rawFill === 'object'
+      ? Array.isArray(rawFill.colorStops)
+        ? 'gradient'
+        : rawFill.source != null || rawFill.repeat != null
+          ? 'image'
+          : 'solid'
+      : 'solid';
+  /** Which fill section is shown: explicit chip choice wins, else the object's live fill */
+  const shownFill: 'solid' | 'gradient' | 'image' =
+    subTool === 'fill-gradient' ? 'gradient' : subTool === 'fill-image' ? 'image' : subTool === 'fill-solid' ? 'solid' : fillMode;
+
   const tabs = [
-    ...((isShape || isText) ? [{ id: 'fill', label: 'Fill' }] : []),
+    ...(fillable ? [{ id: 'fill', label: 'Fill' }] : []),
     { id: 'border', label: 'Border' },
     { id: 'shadow', label: 'Shadow' },
     { id: 'opacity', label: 'Opacity' },
     ...(activeObj.type === 'rect' ? [{ id: 'radius', label: 'Radius' }] : []),
   ];
   const activeTab = subTool && tabs.some((t) => t.id === subTool) ? subTool : tabs[0].id;
+
+  const onFillImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const url = ev.target?.result as string;
+      if (url) setObjectImageFill(url);
+    };
+    reader.readAsDataURL(f);
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex gap-1 overflow-x-auto border-b border-white/5 pb-2 hide-scroll">
@@ -651,15 +964,53 @@ const StylePanel: React.FC = () => {
       </div>
 
       {activeTab === 'fill' && (
-        <div>
-          <Label>Fill color</Label>
-          <ColorPicker selected={editorState.fill} onChange={(c) => updateStyle('fill', c)} />
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            {(['solid', 'gradient', 'image'] as const).map((m) => (
+              <Chip key={m} active={shownFill === m} onClick={() => setSubTool(`fill-${m}`)} className="flex-1">
+                {m === 'solid' ? 'Solid' : m === 'gradient' ? 'Gradient' : 'Image'}
+              </Chip>
+            ))}
+          </div>
+          {shownFill === 'gradient' && (
+            <div>
+              <Label>Gradient — up to 5 stops (tri-gradient+)</Label>
+              <GradientPicker selected="" onChange={(g) => { setObjectGradientFill(g); commitHistory(); }} onCustomGradient={() => {}} />
+            </div>
+          )}
+          {shownFill === 'image' && (
+            <div className="space-y-2">
+              <Label>Fill with an image (cover)</Label>
+              <button
+                onClick={() => imgFillRef.current?.click()}
+                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-800/70 py-3 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
+              >
+                <FaUpload /> Upload fill image
+              </button>
+              <input type="file" accept="image/*" ref={imgFillRef} className="hidden" onChange={onFillImage} />
+              <p className="text-[10px] text-zinc-500">The image is clipped to the shape and scales with it.</p>
+            </div>
+          )}
+          {shownFill === 'solid' && (
+            <div>
+              <Label>Fill color</Label>
+              <ColorPicker
+                selected={editorState.fill}
+                onChange={(c) => {
+                  setObjectSolidFill(c);
+                  updateStyle('fill', c);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
+
       {activeTab === 'border' && (
         <>
           <Slider label="Width" value={editorState.strokeW} min={0} max={40} step={1} defaultVal={0} onChange={(v) => updateStyle('strokeW', v)} onCommit={commitHistory} />
           <div><Label>Color</Label><ColorPicker selected={editorState.strokeC} onChange={(c) => updateStyle('strokeC', c)} /></div>
+          <BorderStackBuilder />
         </>
       )}
       {activeTab === 'shadow' && (

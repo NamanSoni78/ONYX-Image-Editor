@@ -113,6 +113,10 @@ export const importProject = async (file: File): Promise<string | null> => {
       thumbnail: projectData.thumbnail,
       lastModified: Date.now(),
       data: projectData.data,
+      // Keep the document size — without it a re-imported project would fall
+      // back to 1080×1080 and silently crop/differ from the original doc.
+      docW: typeof projectData.docW === 'number' ? projectData.docW : undefined,
+      docH: typeof projectData.docH === 'number' ? projectData.docH : undefined,
     };
 
     await db.put(STORE_NAME, newProject);

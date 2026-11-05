@@ -24,6 +24,7 @@ interface Project {
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjectId }) => {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [confirmDel, setConfirmDel] = useState<Project | null>(null);
 
   async function loadProjects() {
     const list = await getAllProjects();
@@ -36,13 +37,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjec
     if (isOpen) loadProjects();
   }, [isOpen]);
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (confirm('Delete this project? This cannot be undone.')) {
-      await deleteProject(id);
-      if (id === currentProjectId) router.push('/');
-      else loadProjects();
-    }
+  const handleDelete = async (id: string) => {
+    await deleteProject(id);
+    setConfirmDel(null);
+    if (id === currentProjectId) {
+      onClose();
+      router.push('/');
+    } else loadProjects();
   };
 
   return (
@@ -73,6 +74,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjec
             <div className="space-y-2 p-4">
               <Link
                 href="/editor"
+                onClick={() => {
+                  // /editor → /editor on a scratch canvas is a no-op soft nav —
+                  // hard-navigate so the canvas is truly fresh.
+                  if (window.location.pathname === '/editor' && !currentProjectId) {
+                    window.location.href = '/editor';
+                  }
+                }}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]"
               >
                 <FaPlus /> New Project
@@ -117,9 +125,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjec
                       </div>
                     </div>
                     <button
-                      onClick={(e) => handleDelete(e, p.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDel(p);
+                      }}
                       aria-label={`Delete ${p.name}`}
-                      className="rounded-lg p-2 text-zinc-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
+                      className="touch-visible rounded-lg p-2 text-zinc-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
                     >
                       <FaTrash size={12} />
                     </button>
@@ -131,6 +142,44 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, currentProjec
               </div>
             </div>
           </motion.div>
+
+          {/* Delete confirm (replaces the native confirm() dialog) */}
+          {confirmDel && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Delete project"
+              onClick={() => setConfirmDel(null)}
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+            >
+              <div
+                className="glass w-full max-w-sm rounded-2xl border border-white/10 p-5 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-base font-bold text-white">Delete project?</h3>
+                <p className="mt-1 text-sm text-zinc-400">
+                  “{confirmDel.name}” will be removed from this browser. This cannot be undone.
+                </p>
+                <div className="mt-5 flex gap-2">
+                  <button
+                    onClick={() => setConfirmDel(null)}
+                    className="focus-ring flex-1 rounded-xl border border-white/10 bg-zinc-800/70 py-3 text-sm font-bold text-zinc-200 hover:bg-zinc-800"
+                  >
+                    Keep it
+                  </button>
+                  <button
+                    onClick={() => void handleDelete(confirmDel.id)}
+                    className="focus-ring flex-1 rounded-xl border border-red-500/30 bg-red-500/15 py-3 text-sm font-bold text-red-300 hover:bg-red-500/25"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </>
       )}
     </AnimatePresence>

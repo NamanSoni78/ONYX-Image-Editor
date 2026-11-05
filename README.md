@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor v2.0
+# 🎨 Onyx Image Editor v2.1
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,13 +6,39 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx v2.0** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
+**Onyx v2.1** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
 🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
 
 ---
 
-## ✨ What's new in v2.0
+## ✨ What's new in v2.1
+
+### 🖼️ Export, upgraded
+- **Pick export shape** — circle, rounded, triangle, star, heart, hexagon, pentagon, diamond masks (transparent outside in PNG; white fill in JPG)
+- **Exact-pixel resize** with a default-locked aspect ratio (unlock freely — re-locking snaps back)
+- **0.5×–4× + 16K** scale chips (device caps: 16 384 px / 268 MP, real output size reported)
+
+### 🔷 Shapes, borders & fills
+- **Custom n-sided polygons and n-point stars**
+- **Border stacks**: up to 6 concentric borders — gradient thickness ramp (thin→thick), gradient colors, or per-border custom color+width, with gap control
+- **Corner radius** for rectangles
+- **Fills for any shape/text**: solid, **gradient / tri-gradient+ (up to 5 stops)** with proper CSS angle semantics, or **custom image** (cover-fit)
+
+### 🎨 Backgrounds & document
+- **Background system**: solid color, gradient (up to 5 stops), transparent checkerboard, or **image as background** (cover-fit, rescales with the document, undoable)
+- **Aspect-ratio management** at creation (presets + ratio chips) and after (Document panel with W/H lock, content stays centered)
+- **Layers 2.0**: position slider to reorder (0 = bottom ↔ top), inline rename
+
+### 🐛 Stability (parallel bug-hunt round)
+- Transparent PNG exports are truly transparent; JPG never black; layer ordering can never hide content below the canvas frame
+- Multi-select delete + full undo coverage (deletes, borders, backgrounds, transforms, renames)
+- Shortcuts never fire while typing; New Project truly starts fresh; scratch autosave never races the project write
+- Full list: `bugfix.md` §E (49 fixes from 3 parallel bug-hunt subagents, browser-verified)
+
+---
+
+## ✨ What was new in v2.0
 
 ### 🖥️ Pro desktop workspace
 - Figma-style layout: **left tool rail** (tooltips + shortcuts) · center canvas · **right contextual properties panel** with layers
@@ -25,7 +51,7 @@
 ### 🛠️ More editing power
 - 15 filter presets + 6 stackable adjustments (brightness/contrast/saturation/hue/blur/grain) that **no longer clobber each other**
 - **Hold-to-compare** original, remove-color (color key) with tolerance, crop with ratio presets, image masking, text with 12 fonts/spacing/line-height, stickers, draw, layers with thumbnails/visibility/lock
-- **Export v2**: PNG (transparent) / JPG / WebP · quality · 0.5×–3× scale · custom width · **copy-to-clipboard**
+- **Export**: PNG (transparent) / JPG / WebP · quality · 0.5×–4× + 16K · exact-px resize with aspect lock · shape pick · **copy-to-clipboard**
 - Drag & drop, clipboard paste (image + text), onboarding size presets (Instagram, Story, YouTube, X, Pinterest, Facebook)
 
 ### ⚡ Performance & hosting

@@ -66,7 +66,7 @@ export const CustomGradientBuilder: React.FC<CustomGradientBuilderProps> = ({ on
 
             {/* Direction (Linear Only) */}
             {type === 'linear' && (
-                <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
+                <div className="flex gap-2 overflow-x-auto hide-scroll pb-2">
                     {['to right', 'to left', 'to bottom', 'to top', '45deg', '-45deg'].map(d => (
                         <button
                             key={d}
@@ -85,7 +85,7 @@ export const CustomGradientBuilder: React.FC<CustomGradientBuilderProps> = ({ on
                      <span className="text-xs font-bold text-zinc-500">COLORS</span>
                      <button onClick={handleAddColor} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"><FaPlus/> Add</button>
                 </div>
-                <div className="flex gap-2 overflow-x-auto scrollbar-hide py-2">
+                <div className="flex gap-2 overflow-x-auto hide-scroll py-2">
                     {colors.map((c, i) => (
                         <div key={i} className="flex flex-col items-center gap-1 flex-shrink-0">
                             <input

@@ -28,7 +28,7 @@ export const GradientPicker: React.FC<GradientPickerProps> = ({ selected, onChan
     }
 
     return (
-        <div className="flex gap-2 overflow-x-auto py-2 scrollbar-hide items-center">
+        <div className="flex gap-2 overflow-x-auto py-2 hide-scroll items-center">
              {/* Create New */}
              <button
                 onClick={() => setShowBuilder(true)}

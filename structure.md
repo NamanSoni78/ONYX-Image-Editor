@@ -1,4 +1,4 @@
-# ONYX v2.0 — Project Structure
+# ONYX v2.1 — Project Structure
 
 > File map + short docs for future agents (or future you).
 > Stack: **Next.js 16 (App Router, static export) · React 19 · Tailwind v4 · Fabric.js 5 · framer-motion · IndexedDB (idb) · react-cropper**
@@ -6,13 +6,14 @@
 
 ```
 ONYX-Image-Editor-main/
-├── plan.md                      ← v2.0 upgrade plan (goals, decisions, file plan)
-├── worklog.md                   ← chronological log of all v2.0 work
-├── bugfix.md                    ← bugs fixed + breaking changes + known limits
+├── plan.md                      ← v2.0 plan + v2.1 round goals
+├── worklog.md                   ← chronological log (v2.0 phases 1-7 + v2.1 phases 8-11)
+├── bugfix.md                    ← bugs fixed + breaking changes + known limits (v2.0 §A-D + v2.1 §E)
 ├── structure.md                 ← this file
 ├── next.config.ts               ← static export, images.unoptimized
 ├── vercel.json                  ← security headers + SW headers (static export ignores next headers())
-├── package.json                 ← v2.0.0
+├── package.json                 ← v2.1.0
+├── LICENSE                      ← MIT
 ├── eslint.config.mjs            ← next presets; any/ts-comment relaxed for Fabric v5 interop
 ├── tsconfig.json
 │
@@ -39,23 +40,23 @@ ONYX-Image-Editor-main/
     │
     ├── components/
     │   ├── Editor/
-    │   │   ├── CanvasEditor.tsx     ← THE ENGINE (only 'use client' fabric logic): document-frame canvas, zoom/pan (wheel+pinch+space), history(50), keyboard map, paste/drag-drop, scratch mode + autosave, filter stack, export capture, adaptive layout. Exposes everything via EditorContext
-    │   │   ├── EditorContext.tsx    ← EditorAPI type + provider + useEditor() (40+ members: state + actions)
-    │   │   ├── constants.ts         ← FONTS, DOC_PRESETS, FILTER_PRESETS(15, css previews), ADJUSTMENTS(6), STICKERS, EditorState, SHORTCUTS(31)
+    │   │   ├── CanvasEditor.tsx     ← THE ENGINE (only 'use client' fabric logic): document-frame canvas, zoom/pan (wheel+pinch+space), history(50), keyboard map, paste/drag-drop, scratch mode + autosave, filter stack, export capture (shape masks / exact px / 16K caps), bg system (color/gradient/checker/image-layer), border stacks, gradient+image fills, layer index API, order ops (frame-safe), adaptive layout. Exposes everything via EditorContext
+    │   │   ├── EditorContext.tsx    ← EditorAPI type + provider + useEditor() (40+ members: state + actions; DocBg, ExportShape, BorderStackConfig, LayerInfo types)
+    │   │   ├── constants.ts         ← FONTS, DOC_PRESETS, FILTER_PRESETS(15), ADJUSTMENTS(6), STICKERS, EditorState, SHORTCUTS(32)
     │   │   ├── TopBar.tsx           ← logo, inline project rename, save-state pill, undo/redo, zoom%, palette btn, Export
-    │   │   ├── DesktopRail.tsx      ← left vertical tool rail (md+): 13 tools, Tooltip+shortcut, contextual disable (needs image/object)
+    │   │   ├── DesktopRail.tsx      ← left vertical tool rail (md+): 15 tools (incl. Document + BG), Tooltip+shortcut, contextual disable (needs image/object)
     │   │   ├── PropertiesPanel.tsx  ← right panel (md+): contextual tab chips (image/text/shape/none) + tool content + collapsible layers
-    │   │   ├── MobileToolbar.tsx    ← bottom toolbar (<md): scrollable icon row with fade mask; contextual tool groups
-    │   │   ├── LayersPanel.tsx      ← LayersList (shared): thumbs, name, eye, lock, order buttons
+    │   │   ├── MobileToolbar.tsx    ← bottom toolbar (<md): scrollable icon row; contextual groups (image: Crop/Mask/Adjust/Filter; text: re-format; object: Style/Arrange/Clone/Delete)
+    │   │   ├── LayersPanel.tsx      ← LayersList (shared): thumbs, inline rename, eye, lock, position slider (0=bottom ↔ top) + order arrows
     │   │   ├── ZoomControls.tsx     ← floating −/%/+/fit cluster (bottom-right of canvas)
-    │   │   ├── EmptyState.tsx       ← onboarding overlay: dropzone + 6 social presets (hidden once layers exist)
-    │   │   ├── ExportPanel.tsx      ← modal: PNG/JPG/WebP(feature-detected), quality, 0.5–3× + custom width, transparent PNG, copy-to-clipboard, live dims
+    │   │   ├── EmptyState.tsx       ← onboarding overlay: dropzone + presets + ratio chips incl. 2:3 (hidden once layers exist)
+    │   │   ├── ExportPanel.tsx      ← modal: PNG/JPG/WebP, quality, 0.5–4× + 16K chips + ratio input, exact-px resize (aspect lock), shape pick (9 masks), transparent PNG, copy-to-clipboard, live capped dims
     │   │   ├── ShortcutsModal.tsx   ← "?" cheat sheet from SHORTCUTS
     │   │   ├── CommandPalette.tsx   ← Ctrl+K fuzzy actions (tools, filters, presets, zoom, help)
-    │   │   ├── CropModal.tsx        ← react-cropper fullscreen + ratio chips
-    │   │   ├── EditorClient.tsx     ← dynamic(ssr:false) + Suspense wrapper (searchParams live in CanvasEditor)
+    │   │   ├── CropModal.tsx        ← react-cropper fullscreen + ratio chips + Escape + ready-guard
+    │   │   ├── EditorClient.tsx     ← dynamic(ssr:false) + Suspense + epoch-keyed remount on document switches (adoption-aware: URL rewrite on first scratch autosave does NOT remount)
     │   │   └── panels/
-    │   │       └── ToolPanels.tsx   ← 13 panel contents (Add/Document/BG/Text/Shape/Draw/Sticker/Adjust/Filter/Mask/MaskEdit/Arrange/Style) + renderToolPanel() + PANEL_TITLES — used by BOTH desktop panel & mobile sheets
+    │   │       └── ToolPanels.tsx   ← 13 panel contents (Add/Document/BG/Text/Shape/Draw/Sticker/Adjust/Filter/Mask/MaskEdit/Arrange/Style — Shape has n-gon/star, Style has fills + BorderStackBuilder) + renderToolPanel() + PANEL_TITLES — used by BOTH desktop panel & mobile sheets
     │   ├── Home/
     │   │   ├── ProjectDashboard.tsx ← 'use client': project grid (thumbs, hover actions, inline rename, delete confirm), preset quick-launch, scratch start, .onyx import/export
     │   │   ├── FaqSection.tsx       ← 6 FAQs, <details> accordions + FAQPage JsonLd
@@ -75,27 +76,29 @@ ONYX-Image-Editor-main/
     │       ├── CustomGradientBuilder.tsx
     │       └── IconBtn.tsx          ← (legacy v1 helper, still exported)
     │
-    └── lib/
-        ├── storage.ts           ← IndexedDB via idb: projects {id,name,thumbnail,lastModified,data,docW,docH}; create/get/getAll/update/delete/rename/import (.onyx JSON)
-        ├── fonts.ts             ← MORE_FONTS (6 extra) + idempotent loadFonts()
-        ├── features.ts          ← TOOLS catalogue data for /tools page (12 entries)
-        ├── schema.ts            ← JsonLd generators (org/website/softwareapp/faq)
-        └── seo-metadata.ts      ← generateMetadata helper for site pages
-```
+    │   └── lib/
+    │       ├── storage.ts           ← IndexedDB via idb: projects {id,name,thumbnail,lastModified,data,docW,docH}; import keeps docW/docH
+    │       ├── fonts.ts             ← MORE_FONTS (6 extra) + idempotent loadFonts()
+    │       ├── features.ts          ← TOOLS catalogue data for /tools page (12 entries)
+    │       ├── schema.ts            ← JsonLd generators (org/website/softwareapp/faq)
+    │       └── seo-metadata.ts      ← generateMetadata helper for site pages
+    ```
 
 ## Key data flows
 
 - **Editor state**: `CanvasEditor` owns fabric + React state → exposes `api` object through `EditorContext` → every panel/toolbar reads `useEditor()`. Fabric is the source of truth for objects; `EditorState` mirrors the *selection's* props (synced by `syncFromObject`).
-- **Document model**: `onyx-frame` fabric.Rect = the document. Canvas element stays viewport-sized; zoom/pan = `viewportTransform`. First image adopts its pixel size; presets (`?preset=`) or Document panel can resize. Export/thumbnails: resize canvas → identity transform → capture → restore (`renderDocDataURL`).
-- **Persistence**: any mutation → `scheduleSaveRef` (1.1 s debounce) → `doSave` → (scratch? create project + `history.replaceState`) → `updateProject(data, thumb, name, {docW,docH})`.
-- **History**: `{json, w, h}` snapshots, max 50, `isLockedRef` guards restore loops.
+- **Document model**: `onyx-frame` fabric.Rect = the document. Canvas element stays viewport-sized; zoom/pan = `viewportTransform`. First image adopts its pixel size and starts the doc TRANSPARENT (`onyxBgTransparent`); presets (`?preset=`) or Document panel can resize (content centered, frame gradient rebuilt). Export/thumbnails: resize canvas → identity transform → capture → restore (`renderDocDataURL`, clears `backgroundColor` for transparent captures, returns real capped `{url,w,h}`).
+- **Persistence**: any mutation → `scheduleSaveRef` (1.1 s debounce) → `doSave` → (scratch? create project + mark `window.__onyxAdoptedPid` + `history.replaceState`) → `updateProject(data, thumb, name, {docW,docH})`. Remount policy lives in `EditorClient` (epoch key; adoption never remounts).
+- **History**: `{json, w, h}` snapshots, max 50, `isLockedRef` guards restore loops. **Never call `saveHistory()` while `isLockedRef.current` is true — it silently no-ops** (commit history AFTER the lock).
+- **Backgrounds**: color/gradient bake into the frame fill (`onyxBgCss` round-trips the CSS); transparent = checker Pattern + `onyxBgTransparent` flag; image = cover-fit fabric.Image layer flagged `onyxBgImage` directly above the frame (never `canvas.backgroundImage` — that renders under the frame).
+- **Ordering**: fabric's sendToBack/sendBackwards can drop objects BELOW the frame → all order ops use the live `_objects` array with `frameIdx + 1` as the floor (`apiOrder`, `setLayerIndex`).
 
 ## Conventions to keep
 
 1. No new server runtime — anything new must work in `output: 'export'`.
 2. Fabric v5 typings lag → `as any`/`@ts-ignore` is accepted interop (see eslint.config.mjs note); prefer tagging custom filter props (`onyxPreset`, `onyxRemove`).
 3. Panel content goes in `panels/ToolPanels.tsx` so desktop and mobile stay in sync.
-4. New keyboard shortcuts must be added to `SHORTCUTS` in `constants.ts` (single source for the cheat sheet) and guarded by `isTyping()`.
+4. New keyboard shortcuts must be added to `SHORTCUTS` in `constants.ts` (single source for the cheat sheet) and guarded by `isTyping()` / `domTyping()` (canvas-level combos must never fire in DOM inputs).
 5. Use `toast()` for feedback; never `alert/confirm/prompt`.
 6. New pages: static, add to `public/sitemap.xml` + nav.
 
