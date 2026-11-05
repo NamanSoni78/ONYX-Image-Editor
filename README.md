@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor v2.1
+# 🎨 Onyx Image Editor v2.2
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,13 +6,40 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx v2.1** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
+**Onyx v2.2** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
 🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
 
 ---
 
-## ✨ What's new in v2.1
+## ✨ What's new in v2.2
+
+### ✂️ True shape crops (any object)
+- **Crop · real cut**: circular, triangular, polygonal (n sides, 3–20), star, heart, hexagon, pentagon, diamond, square crops for images, shapes, text and groups — the object is genuinely cut into the shape
+- **Borders follow the crop**: add borders AFTER a circular crop and you get perfect circular rings
+- **Mask (reversible)** now also works on any object, not just images
+- **Adjust / Filters / Crop for shapes & text** — vector objects rasterize on first use, one undo restores the original
+
+### 🎯 Pick export
+- Full-screen, mask-style **region picker**: drag & resize a box anywhere on the canvas
+- Any output resolution up to **16 384 px** per side, ratio-locked or free, with 1×/2×/4×/16K chips
+- Shape masks (incl. n-gon) apply to the picked region — transparent outside in PNG/WebP
+
+### 🔷 Borders & layers
+- Border stacks up to **1024 borders** (single-layer rendering engine — stays fast), following the object's own shape
+- **Canva-style layer dragging**: pinch the ⠿ handle and slide rows to reorder (keyboard ↑/↓ too)
+
+### 📱 Mobile & transform UX
+- New **selection quick-bar** (copy, flip ↔↕, rotate ±90°, delete) with spring animation
+- **45° rotation snapping** with a live angle badge (Shift = free rotate), size badge while scaling, smart center/edge alignment guides
+- One close affordance per sheet; animated sheet transitions
+
+### 🐛 Stability
+- 27 more fixes from the v2.2 parallel bug-hunt round — full list in `bugfix.md` §F
+
+---
+
+## ✨ What was new in v2.1
 
 ### 🖼️ Export, upgraded
 - **Pick export shape** — circle, rounded, triangle, star, heart, hexagon, pentagon, diamond masks (transparent outside in PNG; white fill in JPG)
@@ -21,14 +48,14 @@
 
 ### 🔷 Shapes, borders & fills
 - **Custom n-sided polygons and n-point stars**
-- **Border stacks**: up to 6 concentric borders — gradient thickness ramp (thin→thick), gradient colors, or per-border custom color+width, with gap control
+- **Border stacks**: up to 6 concentric borders — gradient thickness ramp (thin→thick), gradient colors, or per-border custom color+width, with gap control *(v2.2: up to 1024, follows the object/crop shape)*
 - **Corner radius** for rectangles
 - **Fills for any shape/text**: solid, **gradient / tri-gradient+ (up to 5 stops)** with proper CSS angle semantics, or **custom image** (cover-fit)
 
 ### 🎨 Backgrounds & document
 - **Background system**: solid color, gradient (up to 5 stops), transparent checkerboard, or **image as background** (cover-fit, rescales with the document, undoable)
 - **Aspect-ratio management** at creation (presets + ratio chips) and after (Document panel with W/H lock, content stays centered)
-- **Layers 2.0**: position slider to reorder (0 = bottom ↔ top), inline rename
+- **Layers 2.0**: position slider to reorder (0 = bottom ↔ top), inline rename *(v2.2: replaced by Canva-style drag-to-reorder)*
 
 ### 🐛 Stability (parallel bug-hunt round)
 - Transparent PNG exports are truly transparent; JPG never black; layer ordering can never hide content below the canvas frame

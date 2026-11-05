@@ -13,7 +13,7 @@ import {
 import { Slider } from '@/components/ui/Slider';
 import { ColorPicker } from '@/components/ui/ColorPicker';
 import { GradientPicker } from '@/components/ui/GradientPicker';
-import { useEditor, BorderStackConfig } from '../EditorContext';
+import { useEditor, BorderStackConfig, CropShapeSpec, MAX_BORDERS } from '../EditorContext';
 import {
   ADJUSTMENTS, FILTER_PRESETS, STICKERS, FONTS, DOC_PRESETS,
 } from '../constants';
@@ -506,11 +506,17 @@ const StickerPanel: React.FC = () => {
 
 const AdjustPanel: React.FC = () => {
   const { activeObj, editorState, adjustImage, commitHistory, holdCompare, startCrop, toggleRemoveColor, setRemoveColor } = useEditor();
-  if (!activeObj || activeObj.type !== 'image') {
-    return <p className="py-6 text-center text-xs text-zinc-500">Select an image to adjust it.</p>;
+  if (!activeObj) {
+    return <p className="py-6 text-center text-xs text-zinc-500">Select an object to adjust it.</p>;
   }
+  const isVector = activeObj.type !== 'image';
   return (
     <div className="space-y-4">
+      {isVector && (
+        <p className="rounded-lg border border-indigo-400/25 bg-indigo-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-indigo-200">
+          Shapes & text are rasterized on the first adjustment — undo restores the vector original.
+        </p>
+      )}
       {ADJUSTMENTS.map((a) => (
         <Slider
           key={a.key}
@@ -580,11 +586,18 @@ const AdjustPanel: React.FC = () => {
 
 const FilterPanel: React.FC = () => {
   const { activeObj, editorState, applyFilterPreset } = useEditor();
-  if (!activeObj || activeObj.type !== 'image') {
-    return <p className="py-6 text-center text-xs text-zinc-500">Select an image to apply filters.</p>;
+  if (!activeObj) {
+    return <p className="py-6 text-center text-xs text-zinc-500">Select an object to apply filters.</p>;
   }
+  const isVector = activeObj.type !== 'image';
   return (
-    <div className="grid grid-cols-4 gap-2.5 sm:grid-cols-5">
+    <div className="space-y-3">
+      {isVector && (
+        <p className="rounded-lg border border-indigo-400/25 bg-indigo-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-indigo-200">
+          Shapes & text are rasterized on the first filter — undo restores the vector original.
+        </p>
+      )}
+      <div className="grid grid-cols-4 gap-2.5 sm:grid-cols-5">
       {FILTER_PRESETS.map((f) => (
         <button
           key={f.name}
@@ -610,34 +623,87 @@ const FilterPanel: React.FC = () => {
           </span>
         </button>
       ))}
+      </div>
     </div>
   );
 };
 
 const MaskPanel: React.FC = () => {
-  const { activeObj, startMasking } = useEditor();
-  if (!activeObj || activeObj.type !== 'image') {
-    return <p className="py-6 text-center text-xs text-zinc-500">Select an image to mask it.</p>;
+  const { activeObj, startMasking, applyShapeCrop } = useEditor();
+  const [mode, setMode] = useState<'mask' | 'crop'>('mask');
+  const [sides, setSides] = useState(6);
+  if (!activeObj) {
+    return <p className="py-6 text-center text-xs text-zinc-500">Select an object to mask or crop it.</p>;
   }
-  const shapes = [
+  if ((activeObj as any).type === 'activeSelection') {
+    return <p className="py-6 text-center text-xs text-zinc-500">Select a single object to mask or crop it.</p>;
+  }
+  const maskShapes = [
     { key: 'rect' as const, label: 'Square', visual: <div className="h-7 w-7 rounded border-2 border-zinc-300" /> },
     { key: 'circle' as const, label: 'Circle', visual: <div className="h-7 w-7 rounded-full border-2 border-zinc-300" /> },
     { key: 'triangle' as const, label: 'Triangle', visual: <div className="h-0 w-0 border-b-[26px] border-l-[14px] border-r-[14px] border-b-zinc-300 border-l-transparent border-r-transparent" /> },
     { key: 'heart' as const, label: 'Heart', visual: <span className="text-2xl">❤️</span> },
     { key: 'star' as const, label: 'Star', visual: <span className="text-2xl">⭐</span> },
   ];
+  const cropShapes: { key: CropShapeSpec['shape']; label: string; visual: React.ReactNode }[] = [
+    { key: 'circle', label: 'Circle', visual: <div className="h-7 w-7 rounded-full border-2 border-zinc-300" /> },
+    { key: 'square', label: 'Square', visual: <div className="h-7 w-7 rounded border-2 border-zinc-300" /> },
+    { key: 'rounded', label: 'Round', visual: <div className="h-7 w-7 rounded-lg border-2 border-zinc-300" /> },
+    { key: 'triangle', label: 'Triangle', visual: <div className="h-0 w-0 border-b-[26px] border-l-[14px] border-r-[14px] border-b-zinc-300 border-l-transparent border-r-transparent" /> },
+    { key: 'star', label: 'Star', visual: <span className="text-2xl">⭐</span> },
+    { key: 'heart', label: 'Heart', visual: <span className="text-2xl">❤️</span> },
+    { key: 'hexagon', label: 'Hex', visual: <span className="text-2xl">⬡</span> },
+    { key: 'pentagon', label: 'Penta', visual: <span className="text-2xl">⬠</span> },
+    { key: 'diamond', label: 'Diamond', visual: <div className="h-6 w-6 rotate-45 border-2 border-zinc-300" /> },
+    { key: 'polygon', label: `${sides}-gon`, visual: <span className="text-xs font-black text-zinc-300">{sides}</span> },
+  ];
   return (
-    <div className="grid grid-cols-5 gap-2">
-      {shapes.map((s) => (
-        <button
-          key={s.key}
-          onClick={() => startMasking(s.key)}
-          className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
-        >
-          {s.visual}
-          <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
-        </button>
-      ))}
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <Chip active={mode === 'mask'} onClick={() => setMode('mask')} className="flex-1">Mask · reversible</Chip>
+        <Chip active={mode === 'crop'} onClick={() => setMode('crop')} className="flex-1">Crop · real cut</Chip>
+      </div>
+      <p className="text-[10px] leading-relaxed text-zinc-500">
+        {mode === 'mask'
+          ? 'Mask clips the object to the shape — non-destructive, editable afterwards.'
+          : 'Crop truly cuts the object into the shape — borders added after the crop follow the cropped outline.'}
+      </p>
+      {mode === 'mask' ? (
+        <div className="grid grid-cols-5 gap-2">
+          {maskShapes.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => startMasking(s.key)}
+              className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
+            >
+              {s.visual}
+              <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/40 p-2.5">
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Polygon sides</span>
+            <button onClick={() => setSides((s) => Math.max(3, s - 1))} className="focus-ring h-7 w-7 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">−</button>
+            <span className="w-7 text-center font-mono text-xs font-bold text-zinc-100">{sides}</span>
+            <button onClick={() => setSides((s) => Math.min(20, s + 1))} className="focus-ring h-7 w-7 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">+</button>
+            <span className="ml-auto text-[10px] text-zinc-600">3–20</span>
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {cropShapes.map((s) => (
+              <button
+                key={s.key}
+                onClick={() => applyShapeCrop({ shape: s.key, sides })}
+                className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
+              >
+                {s.visual}
+                <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -695,6 +761,8 @@ const ArrangePanel: React.FC = () => {
           <Chip onClick={() => flip('Y')}><FaArrowsUpDown className="mr-1.5 inline" />Flip V</Chip>
           <Chip onClick={() => rotate90(-1)}><FaArrowRotateLeft className="mr-1.5 inline" />−90°</Chip>
           <Chip onClick={() => rotate90(1)}><FaArrowRotateRight className="mr-1.5 inline" />+90°</Chip>
+          <Chip onClick={() => updateTransform({ angle: (((a.angle || 0) - 45) % 360 + 360) % 360 })}>−45°</Chip>
+          <Chip onClick={() => updateTransform({ angle: (((a.angle || 0) + 45) % 360 + 360) % 360 })}>+45°</Chip>
           <Chip onClick={lockToggle} active={!!a.lockMovementX}>
             {a.lockMovementX ? <FaLock className="mr-1.5 inline" /> : <FaUnlock className="mr-1.5 inline" />}
             {a.lockMovementX ? 'Locked' : 'Lock'}
@@ -794,19 +862,33 @@ const BorderStackBuilder: React.FC = () => {
 
       {open && (
         <div className="mt-3 space-y-4">
-          <Slider
-            label="Borders"
-            value={cfg.count}
-            min={1}
-            max={6}
-            step={1}
-            defaultVal={3}
-            format={(v) => String(Math.round(v))}
-            onChange={(v) => patch({ count: v })}
-          />
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <Slider
+                label="Borders"
+                value={Math.min(cfg.count, 24)}
+                min={1}
+                max={24}
+                step={1}
+                defaultVal={3}
+                format={() => String(Math.round(cfg.count))}
+                onChange={(v) => patch({ count: Math.round(v) })}
+              />
+            </div>
+            <NumInput
+              label="N"
+              value={cfg.count}
+              onCommit={(v) =>
+                patch({ count: Math.max(1, Math.min(cfg.mode === 'custom' ? 64 : MAX_BORDERS, Math.round(v) || 1)) })
+              }
+            />
+          </div>
+          <p className="text-[10px] text-zinc-500">
+            Up to {cfg.mode === 'custom' ? 64 : MAX_BORDERS} borders — drag the slider or type an exact count.
+          </p>
           <div className="flex gap-2">
             <Chip active={cfg.mode === 'gradient'} onClick={() => patch({ mode: 'gradient' })}>Gradient ramp</Chip>
-            <Chip active={cfg.mode === 'custom'} onClick={() => patch({ mode: 'custom' })}>Per-border</Chip>
+            <Chip active={cfg.mode === 'custom'} onClick={() => patch({ mode: 'custom', count: Math.min(cfg.count, 64) })}>Per-border</Chip>
           </div>
 
           {cfg.mode === 'gradient' ? (
@@ -845,7 +927,7 @@ const BorderStackBuilder: React.FC = () => {
           ) : (
             <div className="space-y-2">
               <Label>Each border</Label>
-              {Array.from({ length: Math.round(cfg.count) }).map((_, i) => {
+              {Array.from({ length: Math.min(Math.round(cfg.count), 64) }).map((_, i) => {
                 const ring = cfg.rings?.[i] || { width: 6, color: '#ffffff' };
                 return (
                   <div key={i} className="flex items-center gap-2">
@@ -890,7 +972,7 @@ const BorderStackBuilder: React.FC = () => {
             )}
           </div>
           <p className="text-[10px] leading-relaxed text-zinc-500">
-            Borders wrap the object as one layer — remove them anytime to edit the original.
+            Borders wrap the object as one layer (following its shape — or its crop shape) — remove them anytime to edit the original.
           </p>
         </div>
       )}
@@ -1063,7 +1145,7 @@ export const PANEL_TITLES: Record<string, string> = {
   STICKER: 'Stickers',
   ADJUST: 'Adjust',
   FILTER: 'Filters',
-  MASK: 'Mask',
+  MASK: 'Mask & crop',
   MASK_EDIT: 'Mask',
   ARRANGE: 'Arrange',
   STYLE: 'Style',

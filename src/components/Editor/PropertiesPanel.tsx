@@ -18,7 +18,8 @@ export const PropertiesPanel: React.FC = () => {
   const isImage = activeObj?.type === 'image';
   const isText = activeObj?.type === 'i-text' || activeObj?.type === 'text';
 
-  /* Which tabs make sense right now */
+  /* Which tabs make sense right now — Adjust/Filters/Mask work on ANY object
+     (shapes & text rasterize on first use), matching the mobile toolbar. */
   let tabs: { id: MenuTab; label: string }[];
   if (isImage) {
     tabs = [
@@ -31,11 +32,17 @@ export const PropertiesPanel: React.FC = () => {
   } else if (isText) {
     tabs = [
       { id: 'TEXT', label: 'Text' },
+      { id: 'ADJUST', label: 'Adjust' },
+      { id: 'FILTER', label: 'Filters' },
+      { id: 'MASK', label: 'Mask' },
       { id: 'STYLE', label: 'Style' },
       { id: 'ARRANGE', label: 'Arrange' },
     ];
   } else if (activeObj) {
     tabs = [
+      { id: 'ADJUST', label: 'Adjust' },
+      { id: 'FILTER', label: 'Filters' },
+      { id: 'MASK', label: 'Mask' },
       { id: 'STYLE', label: 'Style' },
       { id: 'ARRANGE', label: 'Arrange' },
     ];
@@ -46,7 +53,7 @@ export const PropertiesPanel: React.FC = () => {
     ];
   }
 
-  const panelVisible = menu !== 'HOME' && menu !== 'EXPORT' && menu !== 'LAYERS';
+  const panelVisible = menu !== 'HOME' && menu !== 'EXPORT';
   const activeTab = tabs.find((t) => t.id === menu);
   const showPanel = panelVisible && (activeTab || ['ADD', 'SHAPE', 'DRAW', 'STICKER', 'MASK_EDIT', 'TEXT', 'DOCUMENT', 'BG'].includes(menu));
 
@@ -81,6 +88,11 @@ export const PropertiesPanel: React.FC = () => {
               {PANEL_TITLES[menu] || ''}
             </h3>
             {renderToolPanel(menu)}
+          </>
+        ) : menu === 'LAYERS' ? (
+          <>
+            <h3 className="mb-4 text-xs font-black uppercase tracking-[0.14em] text-zinc-400">Layers</h3>
+            <LayersList />
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 py-16 text-center">

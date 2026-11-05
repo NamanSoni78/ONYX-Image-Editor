@@ -22,8 +22,10 @@ import {
   LayerInfo,
   ExportOptions,
   ExportShape,
+  CropShapeSpec,
   BorderStackConfig,
   BorderRing,
+  MAX_BORDERS,
 } from './EditorContext';
 import { ToastProvider, useToast } from '@/components/ui/Toast';
 import { Sidebar } from '@/components/Layout/Sidebar';
@@ -40,7 +42,7 @@ import { CropModal } from './CropModal';
 import { loadFonts } from '@/lib/fonts';
 import { renderToolPanel } from './panels/ToolPanels';
 import { LayersList } from './LayersPanel';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FaXmark } from 'react-icons/fa6';
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -83,7 +85,7 @@ const OBJECT_TABS: MenuTab[] = ['ADJUST', 'FILTER', 'TEXT', 'STYLE', 'ARRANGE', 
 const CANVAS_EXTRA_PROPS = [
   'selectable', 'name', 'id', 'filters', 'shadow', 'lockMovementX', 'lockMovementY', 'evented', 'visible',
   'onyxBgCss', 'onyxBgTransparent', 'onyxBgImage', 'onyxRing', 'onyxRingCfg', 'onyxRingPart', 'strokeUniform',
-  'lockRotation', 'lockScalingX', 'lockScalingY', 'hasControls',
+  'lockRotation', 'lockScalingX', 'lockScalingY', 'hasControls', 'onyxCropShape', 'onyxUid',
 ];
 
 const canvasToJson = (c: fabric.Canvas) => JSON.stringify(c.toJSON(CANVAS_EXTRA_PROPS as any));
@@ -156,10 +158,14 @@ const starPoints = (points: number, outer: number, inner: number): { x: number; 
   return pts;
 };
 
-export type ExportShapeLocal = ExportShape;
-
 /** Draw an export mask shape (0..1 normalized space) on a 2d context at w×h */
-const traceExportShape = (ctx: CanvasRenderingContext2D, shape: Exclude<ExportShape, 'none'>, w: number, h: number) => {
+const traceExportShape = (
+  ctx: CanvasRenderingContext2D,
+  shape: Exclude<ExportShape, 'none'>,
+  w: number,
+  h: number,
+  sides?: number
+) => {
   const path = new Path2D();
   // Non-square exports: keep the shape's aspect (inscribe in the smaller axis, like circle)
   const s = Math.min(w, h);
@@ -188,9 +194,10 @@ const traceExportShape = (ctx: CanvasRenderingContext2D, shape: Exclude<ExportSh
       path.closePath();
       break;
     }
+    case 'polygon':
     case 'hexagon':
     case 'pentagon': {
-      const pts = polygonPoints(shape === 'hexagon' ? 6 : 5, 0.5).map((p) => map(p.x, p.y));
+      const pts = polygonPoints(shape === 'hexagon' ? 6 : shape === 'pentagon' ? 5 : sides || 6, 0.5).map((p) => map(p.x, p.y));
       path.moveTo(...(pts[0] as [number, number]));
       pts.slice(1).forEach((p) => path.lineTo(...(p as [number, number])));
       path.closePath();
@@ -225,6 +232,294 @@ const traceExportShape = (ctx: CanvasRenderingContext2D, shape: Exclude<ExportSh
   }
   return path;
 };
+
+/* ------------------------------------------------------------------ */
+/* Shape crop + raster engine (works on ANY object)                     */
+/* ------------------------------------------------------------------ */
+
+/** Trace a crop/ring shape inscribed in a w×h box (shared geometry). */
+const traceShapeInto = (path: Path2D, spec: CropShapeSpec, w: number, h: number) => {
+  const s = Math.min(w, h);
+  const cx = w / 2;
+  const cy = h / 2;
+  const map = (x: number, y: number): [number, number] => [cx + x * s, cy + y * s];
+  const poly = (n: number) => {
+    const p = polygonPoints(n, 0.5).map((q) => map(q.x, q.y));
+    path.moveTo(p[0][0], p[0][1]);
+    p.slice(1).forEach((q) => path.lineTo(q[0], q[1]));
+    path.closePath();
+  };
+  switch (spec.shape) {
+    case 'circle':
+      path.ellipse(cx, cy, s / 2, s / 2, 0, 0, Math.PI * 2);
+      break;
+    case 'triangle':
+      poly(3);
+      break;
+    case 'hexagon':
+      poly(6);
+      break;
+    case 'pentagon':
+      poly(5);
+      break;
+    case 'polygon':
+      poly(clamp(spec.sides || 6, 3, 20));
+      break;
+    case 'star': {
+      const p = starPoints(5, 0.5, 0.21).map((q) => map(q.x, q.y));
+      path.moveTo(p[0][0], p[0][1]);
+      p.slice(1).forEach((q) => path.lineTo(q[0], q[1]));
+      path.closePath();
+      break;
+    }
+    case 'diamond':
+      path.moveTo(cx, cy - s / 2);
+      path.lineTo(cx + s / 2, cy);
+      path.lineTo(cx, cy + s / 2);
+      path.lineTo(cx - s / 2, cy);
+      path.closePath();
+      break;
+    case 'heart':
+      path.moveTo(cx, cy + s * 0.475);
+      path.bezierCurveTo(cx - s * 0.49, cy + s * 0.18, cx - s * 0.42, cy - s * 0.34, cx, cy - s * 0.11);
+      path.bezierCurveTo(cx + s * 0.42, cy - s * 0.34, cx + s * 0.49, cy + s * 0.18, cx, cy + s * 0.475);
+      path.closePath();
+      break;
+    case 'rounded': {
+      const r = s / 4;
+      path.moveTo(r, 0);
+      path.arcTo(w, 0, w, h, r);
+      path.arcTo(w, h, 0, h, r);
+      path.arcTo(0, h, 0, 0, r);
+      path.arcTo(0, 0, w, 0, r);
+      path.closePath();
+      break;
+    }
+    case 'square': {
+      // a TRUE square inscribed in the min axis ("Square" crop semantics)
+      path.rect(cx - s / 2, cy - s / 2, s, s);
+      break;
+    }
+    default:
+      path.rect(0, 0, w, h);
+      break;
+  }
+};
+
+/** Trace a crop shape inscribed in w×h and return its TIGHT bounding box (canvas px). */
+const traceCropPath = (
+  spec: CropShapeSpec,
+  w: number,
+  h: number
+): { path: Path2D; box: { x: number; y: number; w: number; h: number } } => {
+  const path = new Path2D();
+  traceShapeInto(path, spec, w, h);
+  const s = Math.min(w, h);
+  const cx = w / 2;
+  const cy = h / 2;
+  const boxOfPts = (pts: { x: number; y: number }[]) => {
+    const mapped = pts.map((p) => [cx + p.x * s, cy + p.y * s] as [number, number]);
+    const xs = mapped.map((p) => p[0]);
+    const ys = mapped.map((p) => p[1]);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  };
+  switch (spec.shape) {
+    case 'circle':
+    case 'diamond':
+    case 'square':
+      return { path, box: { x: cx - s / 2, y: cy - s / 2, w: s, h: s } };
+    case 'rounded':
+      return { path, box: { x: 0, y: 0, w, h } };
+    case 'triangle':
+      return { path, box: boxOfPts(polygonPoints(3, 0.5)) };
+    case 'hexagon':
+      return { path, box: boxOfPts(polygonPoints(6, 0.5)) };
+    case 'pentagon':
+      return { path, box: boxOfPts(polygonPoints(5, 0.5)) };
+    case 'polygon':
+      return { path, box: boxOfPts(polygonPoints(clamp(spec.sides || 6, 3, 20), 0.5)) };
+    case 'star':
+      return { path, box: boxOfPts(starPoints(5, 0.5, 0.21)) };
+    case 'heart':
+    default:
+      return { path, box: { x: cx - s * 0.49, y: cy - s * 0.34, w: s * 0.98, h: s * 0.815 } };
+  }
+};
+
+/** Ring outline geometry for border stacks — follows the object's own shape
+ *  (circle → ellipse, polygon → n-gon, cropped objects → their crop shape). */
+const ringPathFor = (target: fabric.Object): ((w: number, h: number) => Path2D) => {
+  const t: any = target;
+  const ellipse = (w: number, h: number) => {
+    const p = new Path2D();
+    p.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    return p;
+  };
+  // 1) cropped object → rings follow the crop shape (e.g. circle rings on a circle-cropped photo)
+  if (t.onyxCropShape) {
+    const spec: CropShapeSpec = t.onyxCropShape;
+    if (spec.shape === 'circle') return ellipse;
+    return (w, h) => {
+      const p = new Path2D();
+      traceShapeInto(p, spec, w, h);
+      return p;
+    };
+  }
+  // 2) native shape-following rings
+  if (t.type === 'circle') return ellipse;
+  if (t.type === 'triangle')
+    return (w, h) => {
+      const p = new Path2D();
+      p.moveTo(w / 2, 0);
+      p.lineTo(w, h);
+      p.lineTo(0, h);
+      p.closePath();
+      return p;
+    };
+  if (t.type === 'polygon' && Array.isArray(t.points) && t.points.length >= 3) {
+    const tw = Math.abs(t.width) || 1;
+    const th = Math.abs(t.height) || 1;
+    const po = t.pathOffset || { x: 0, y: 0 };
+    const norm = (t.points as { x: number; y: number }[]).map((q) => ({
+      u: (q.x - po.x) / tw + 0.5,
+      v: (q.y - po.y) / th + 0.5,
+    }));
+    return (w, h) => {
+      const p = new Path2D();
+      norm.forEach((q, i) => (i ? p.lineTo(q.u * w, q.v * h) : p.moveTo(q.u * w, q.v * h)));
+      p.closePath();
+      return p;
+    };
+  }
+  if (t.type === 'rect') {
+    const f = clamp((t.rx || 0) / (t.width || 1), 0, 0.5);
+    if (f > 0.01)
+      return (w, h) => {
+        const p = new Path2D();
+        const r = f * Math.min(w, h);
+        p.moveTo(r, 0);
+        p.arcTo(w, 0, w, h, r);
+        p.arcTo(w, h, 0, h, r);
+        p.arcTo(0, h, 0, 0, r);
+        p.arcTo(0, 0, w, 0, r);
+        p.closePath();
+        return p;
+      };
+  }
+  // 3) default: rectangle rings (images, text, groups, paths)
+  return (w, h) => {
+    const p = new Path2D();
+    p.rect(0, 0, w, h);
+    return p;
+  };
+};
+
+/** Render any object axis-aligned (rotation baked in) into an offscreen canvas. */
+const rasterizeToCanvas = (
+  obj: fabric.Object
+): Promise<{ canvas: HTMLCanvasElement; bound: { left: number; top: number; width: number; height: number }; m: number } | null> =>
+  new Promise((resolve) => {
+    try {
+      // NB fabric v5: getBoundingRect(absolute=true) → DOCUMENT coords (no viewport transform).
+      // absolute=false leaks the on-screen zoom/pan into the raster math.
+      const raw = obj.getBoundingRect(true, true);
+      // getBoundingRect ignores shadows — pad so glows survive the raster
+      const sh: any = (obj as any).shadow;
+      const pad =
+        sh && typeof sh !== 'string'
+          ? (sh.blur || 0) + Math.max(Math.abs(sh.offsetX || 0), Math.abs(sh.offsetY || 0))
+          : 0;
+      const bound =
+        pad > 0
+          ? { left: raw.left - pad, top: raw.top - pad, width: raw.width + 2 * pad, height: raw.height + 2 * pad }
+          : raw;
+      const bw = Math.max(1, bound.width);
+      const bh = Math.max(1, bound.height);
+      const m = clamp(Math.min(3, 4096 / Math.max(bw, bh)), 0.2, 3);
+      const tmp = new fabric.StaticCanvas(null, {
+        width: Math.ceil(bw * m),
+        height: Math.ceil(bh * m),
+        enableRetinaScaling: false,
+        backgroundColor: '',
+      } as any);
+      obj.clone(
+        (cl: any) => {
+          if (!cl) {
+            tmp.dispose();
+            resolve(null);
+            return;
+          }
+          cl.set({ left: (obj.left || 0) - bound.left, top: (obj.top || 0) - bound.top, selectable: false, evented: false });
+          tmp.setZoom(m);
+          tmp.add(cl);
+          tmp.renderAll();
+          const out = document.createElement('canvas');
+          out.width = tmp.getWidth();
+          out.height = tmp.getHeight();
+          out.getContext('2d')!.drawImage(tmp.getElement() as HTMLCanvasElement, 0, 0);
+          tmp.dispose();
+          resolve({ canvas: out, bound, m });
+        },
+        CANVAS_EXTRA_PROPS as any
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+
+/** Rasterize an object (optionally shape-cropped to its tight box) into a new fabric.Image.
+ *  Rotation is baked in, opacity/shadow are baked in; lock state + name carry over. */
+const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null): Promise<fabric.Image | null> =>
+  rasterizeToCanvas(obj).then(
+    (r) =>
+      new Promise<fabric.Image | null>((resolve) => {
+        if (!r) {
+          resolve(null);
+          return;
+        }
+        const { canvas, bound, m } = r;
+        let out = canvas;
+        let box = { x: 0, y: 0, w: canvas.width, h: canvas.height };
+        if (spec) {
+          const t = traceCropPath(spec, canvas.width, canvas.height);
+          const c2 = document.createElement('canvas');
+          c2.width = Math.max(1, Math.ceil(t.box.w));
+          c2.height = Math.max(1, Math.ceil(t.box.h));
+          const ctx = c2.getContext('2d')!;
+          ctx.save();
+          ctx.translate(-t.box.x, -t.box.y);
+          ctx.clip(t.path);
+          ctx.drawImage(canvas, 0, 0);
+          ctx.restore();
+          out = c2;
+          box = t.box;
+        }
+        const url = out.toDataURL('image/png');
+        fabric.Image.fromURL(url, (img) => {
+          const src: any = obj;
+          img.set({
+            originX: 'left',
+            originY: 'top',
+            left: bound.left + box.x / m,
+            top: bound.top + box.y / m,
+            scaleX: 1 / m,
+            scaleY: 1 / m,
+            name: src.name,
+            visible: src.visible !== false,
+            lockMovementX: !!src.lockMovementX,
+            lockMovementY: !!src.lockMovementY,
+            lockRotation: !!src.lockRotation,
+            lockScalingX: !!src.lockScalingX,
+            lockScalingY: !!src.lockScalingY,
+            hasControls: src.hasControls !== false,
+          } as any);
+          (img as any).onyxCropShape = spec ? { shape: spec.shape, sides: spec.sides } : src.onyxCropShape || undefined;
+          resolve(img);
+        });
+      })
+  );
 
 let checkerCache: fabric.Pattern | null = null;
 const getCheckerPattern = (): fabric.Pattern => {
@@ -301,7 +596,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const bgInputRef = useRef<HTMLInputElement>(null);
   const frameRef = useRef<fabric.Rect | null>(null);
   const maskShapeRef = useRef<fabric.Object | null>(null);
-  const maskTargetRef = useRef<fabric.Image | null>(null);
+  const maskTargetRef = useRef<fabric.Object | null>(null);
+  /** Live angle/size badge while transforming (direct DOM — no re-renders) */
+  const badgeRef = useRef<HTMLDivElement>(null);
+  /** Active center-snap guide positions (drawn on the overlay context) */
+  const guidesRef = useRef<{ x: number | null; y: number | null } | null>(null);
+  /** guards re-entrant border builds (async image load) */
+  const borderBusyRef = useRef(false);
+  /** guards re-entrant adjust-rasterize (async — slider ticks retrigger it) */
+  const rasterBusyRef = useRef(false);
+  /** lock ownership token — async callbacks must not unlock a newer owner's lock */
+  const lockTokenRef = useRef(0);
   const historyRef = useRef<{ json: string; w: number; h: number }[]>([]);
   const historyStepRef = useRef(-1);
   const isLockedRef = useRef(false);
@@ -415,6 +720,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     if (!c) return;
     const objs = c.getObjects().filter((o) => (o as any).name !== FRAME_NAME);
     const infos: LayerInfo[] = objs.slice().reverse().map((obj) => {
+      // stable ids survive reorders (fallback ids change on every reorder → row remounts)
+      if (!(obj as any).onyxUid) (obj as any).onyxUid = `l${Math.random().toString(36).slice(2, 9)}`;
       let thumb: string | undefined;
       try {
         const w = obj.getScaledWidth() || 40;
@@ -502,6 +809,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const c = canvasRef.current;
       if (!c) return;
       isLockedRef.current = true;
+      // invalidate any in-flight async callback's lock ownership
+      lockTokenRef.current++;
       c.loadFromJSON(entry.json, () => {
         frameRef.current = (c.getObjects().find((o) => (o as any).name === FRAME_NAME) as fabric.Rect) || frameRef.current;
         applyDocSize(entry.w, entry.h, { fit: false });
@@ -541,6 +850,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       targetHeight?: number;
       transparent?: boolean;
       shape?: ExportShape;
+      shapeSides?: number;
+      region?: { left: number; top: number; width: number; height: number };
     }): { url: string; w: number; h: number } => {
       const c = canvasRef.current;
       if (!c) return { url: '', w: 0, h: 0 };
@@ -554,6 +865,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const prevActive = c.getActiveObject();
 
       const { width: dw, height: dh } = docSizeRef.current;
+      // Pick export grabs a sub-region of the document instead of the full frame
+      const reg = opts.region;
+      const baseW = reg ? reg.width : dw;
+      const baseH = reg ? reg.height : dh;
 
       // Resolve the exact output pixel size (aspect-locked unless both are given)
       let outW: number;
@@ -563,11 +878,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         outH = Math.max(1, Math.round(opts.targetHeight));
       } else if (opts.targetWidth) {
         outW = Math.max(1, Math.round(opts.targetWidth));
-        outH = Math.max(1, Math.round((outW * dh) / dw));
+        outH = Math.max(1, Math.round((outW * baseH) / baseW));
       } else {
         const s = opts.scale || 1;
-        outW = Math.max(1, Math.round(dw * s));
-        outH = Math.max(1, Math.round(dh * s));
+        outW = Math.max(1, Math.round(baseW * s));
+        outH = Math.max(1, Math.round(baseH * s));
       }
 
       // Browser safety caps: 16 384 px per side, ≤ 268 MP total
@@ -580,7 +895,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       outH = Math.max(1, Math.floor(outH * cap));
 
       // Capture at (at least) output resolution so text/shapes stay crisp
-      const captureScale = clamp(Math.max(outW / dw, outH / dh), 0.02, 20);
+      const captureScale = clamp(Math.max(outW / baseW, outH / baseH), 0.02, 20);
 
       const isTransparentDoc =
         !!(frame as any)?.onyxBgTransparent || frame?.fill instanceof fabric.Pattern;
@@ -606,7 +921,12 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         c.discardActiveObject();
         c.setDimensions({ width: dw, height: dh });
         c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-        const captured = c.toCanvasElement(captureScale, { left: 0, top: 0, width: dw, height: dh });
+        const captured = c.toCanvasElement(captureScale, {
+          left: reg ? reg.left : 0,
+          top: reg ? reg.top : 0,
+          width: baseW,
+          height: baseH,
+        });
 
         // Compose the final canvas: exact size, optional shape mask
         const out = document.createElement('canvas');
@@ -620,7 +940,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
             ctx.fillRect(0, 0, outW, outH);
           }
           ctx.save();
-          const path = traceExportShape(ctx, opts.shape, outW, outH);
+          const path = traceExportShape(ctx, opts.shape, outW, outH, opts.shapeSides);
           ctx.clip(path);
           ctx.drawImage(captured, 0, 0, outW, outH);
           ctx.restore();
@@ -815,6 +1135,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     } as any);
 
     canvasRef.current = c;
+    // Debug/verification hook — the editor's fabric instance (never used by app code)
+    (window as any).__onyx = { c };
 
     /* ----- document frame ----- */
     const frame = new fabric.Rect({
@@ -855,6 +1177,103 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
     });
     c.on('text:changed', () => scheduleSaveRef.current());
+
+    /* ----- transform UX: 45° rotation snap, size/angle badge, center guides ----- */
+    const setBadge = (x: number, y: number, text: string, accent: boolean) => {
+      const b = badgeRef.current;
+      if (!b) return;
+      b.style.left = `${Math.max(40, Math.min(x, c.getWidth() - 40))}px`;
+      // clamp: keep the badge visible when the object touches the viewport top
+      const clamped = y < 4;
+      b.style.top = clamped ? '6px' : `${y}px`;
+      b.style.transform = clamped ? 'translate(-50%, 0)' : 'translate(-50%, -100%)';
+      b.textContent = text;
+      b.style.color = accent ? '#6ee7b7' : '';
+      b.style.opacity = '1';
+    };
+    c.on('object:rotating', (e: any) => {
+      const o = e.target as fabric.Object;
+      const shift = !!(e.e && (e.e as KeyboardEvent).shiftKey);
+      let snapped = false;
+      // Hold Shift for completely free rotation; default snaps to 45° steps
+      if (!shift && !o.lockRotation) {
+        const step = 45;
+        const nearest = Math.round((o.angle || 0) / step) * step;
+        if (Math.abs((o.angle || 0) - nearest) <= 4) {
+          o.rotate(nearest);
+          snapped = true;
+        }
+      }
+      const r = o.getBoundingRect(false, true);
+      const deg = ((Math.round(o.angle || 0) % 360) + 360) % 360;
+      setBadge(r.left + r.width / 2, r.top - 12, `${deg}°${snapped ? ' ✓' : ''}`, snapped);
+    });
+    c.on('object:scaling', (e: any) => {
+      const o = e.target as fabric.Object;
+      const r = o.getBoundingRect(false, true);
+      setBadge(r.left + r.width / 2, r.top - 12, `${Math.round(o.getScaledWidth())} × ${Math.round(o.getScaledHeight())}`, false);
+    });
+    c.on('object:moving', (e: any) => {
+      const o = e.target as fabric.Object;
+      if ((o as any).name === FRAME_NAME) return;
+      const { width: dw, height: dh } = docSizeRef.current;
+      const th = 7 / (c.getZoom() || 1);
+      // fabric v5: absolute=true → document coords (snap targets live in doc space)
+      const r = o.getBoundingRect(true, true);
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      // Snap candidates: document center + both edges (Canva-style smart guides)
+      const bestOf = (cur: number, cands: number[]): number | null => {
+        let best: number | null = null;
+        let bd = th + 0.0001;
+        for (const cd of cands) {
+          const d = Math.abs(cur - cd);
+          if (d < bd) {
+            bd = d;
+            best = cd;
+          }
+        }
+        return best;
+      };
+      const sx = bestOf(cx, [dw / 2, r.width / 2, dw - r.width / 2]);
+      const sy = bestOf(cy, [dh / 2, r.height / 2, dh - r.height / 2]);
+      if (sx != null) o.set({ left: (o.left || 0) + (sx - cx) });
+      if (sy != null) o.set({ top: (o.top || 0) + (sy - cy) });
+      guidesRef.current = { x: sx, y: sy };
+      o.setCoords();
+    });
+    // Alignment guides live on the overlay context — zero fabric objects, zero history noise
+    c.on('after:render', () => {
+      const g = guidesRef.current;
+      const ctx = (c as any).contextTop as CanvasRenderingContext2D | undefined;
+      if (!g || (!g.x && !g.y) || !ctx) return;
+      const v = c.viewportTransform as number[];
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = '#f472b6';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      if (g.x != null) {
+        const sx = g.x * v[0] + v[4];
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, c.getHeight());
+        ctx.stroke();
+      }
+      if (g.y != null) {
+        const sy = g.y * v[3] + v[5];
+        ctx.beginPath();
+        ctx.moveTo(0, sy);
+        ctx.lineTo(c.getWidth(), sy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+    c.on('mouse:up', () => {
+      guidesRef.current = null;
+      if (badgeRef.current) badgeRef.current.style.opacity = '0';
+      c.requestRenderAll();
+    });
     c.on('selection:created', (e) => syncFromObject(e.selected?.[0]));
     c.on('selection:updated', (e) => syncFromObject(e.selected?.[0]));
     c.on('selection:cleared', () => {
@@ -1102,8 +1521,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     // that's the case, and canvas-level shortcuts (Ctrl+Z…) should still work there.
     const a = canvasRef.current?.getActiveObject() as any;
     if (a && a.isEditing) return false;
-    const t = document.activeElement as HTMLElement | null;
-    return !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+    const t = document.activeElement as HTMLInputElement | null;
+    if (t && t.tagName === 'INPUT') {
+      const ty = (t.type || '').toLowerCase();
+      // range/color/checkbox inputs don't consume text — keep canvas shortcuts live
+      // (otherwise Ctrl+Z dies after touching any slider)
+      if (ty === 'range' || ty === 'color' || ty === 'checkbox' || ty === 'radio') return false;
+      return true;
+    }
+    return !!(t && (t.tagName === 'TEXTAREA' || t.isContentEditable));
   }, []);
 
   useEffect(() => {
@@ -1186,7 +1612,20 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
       }
 
-      if (isTyping() || paletteOpen || shortcutsOpen || cropData || menu === 'EXPORT') return;
+      // Plain keys stay live over range/color inputs (shortcuts keep working after
+      // touching a slider) but stay blocked for text inputs and fabric text editing.
+      const ae = document.activeElement as HTMLInputElement | null;
+      const aeBlocks =
+        !!ae &&
+        (ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable ||
+          (ae.tagName === 'INPUT' && !['range', 'color', 'checkbox', 'radio'].includes((ae.type || '').toLowerCase())));
+      const fabricEditing = !!(c.getActiveObject() as any)?.isEditing;
+      if (aeBlocks || fabricEditing || paletteOpen || shortcutsOpen || cropData || menu === 'EXPORT') return;
+
+      // While a mask shape is being positioned, the ACTIVE object IS the temp
+      // shape — plain shortcuts must not fire (Escape above still finishes it).
+      if (maskShapeRef.current) return;
 
       /* --- plain keys --- */
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1220,6 +1659,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (e.key.startsWith('Arrow')) {
         const a = c.getActiveObject();
         if (a) {
+          // native slider/number arrows win while an input holds focus
+          if (ae && ae.tagName === 'INPUT') return;
           e.preventDefault();
           const step = e.shiftKey ? 10 : 1;
           const map: Record<string, [number, number]> = {
@@ -1316,6 +1757,48 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 
   /* ---------------- actions (declared after hooks, before api) ---------------- */
   const getActive = useCallback(() => canvasRef.current?.getActiveObject() ?? activeObjRef.current ?? null, []);
+
+  /** Adjust/filter/crop need an image — rasterize shapes & text once (undoable). */
+  const ensureAdjustableImage = useCallback(
+    (retry?: () => void): boolean => {
+      const c = canvasRef.current;
+      const obj = getActive();
+      if (!c || !obj) return false;
+      if (obj.type === 'image') return true;
+      if ((obj as any).type === 'activeSelection') return false;
+      // Slider ticks retrigger this — only ONE rasterize may run per object
+      if (rasterBusyRef.current) return false;
+      rasterBusyRef.current = true;
+      toast('Rasterizing for adjustments — undo restores the original', 'info');
+      const myToken = ++lockTokenRef.current;
+      rasterizeObjectToImage(obj, (obj as any).onyxCropShape || null).then((img) => {
+        rasterBusyRef.current = false;
+        if (!img) return;
+        // the user may have deleted / undone / switched selection mid-flight
+        if ((obj as any).canvas !== c) return;
+        const idx = c.getObjects().indexOf(obj);
+        const keepSelection = !c.getActiveObject() || c.getActiveObject() === obj;
+        isLockedRef.current = true;
+        try {
+          c.remove(obj);
+          c.insertAt(img, Math.max(0, Math.min(idx, c.getObjects().length)), false);
+          if (keepSelection) c.setActiveObject(img);
+          c.requestRenderAll();
+        } finally {
+          if (lockTokenRef.current === myToken) isLockedRef.current = false;
+        }
+        updateLayersNow();
+        // NOTE: no saveHistory here — the caller's commit (slider onCommit /
+        // filter apply / crop apply) pushes ONE history entry covering the
+        // rasterize + the adjustment, so a single undo restores the vector original.
+        scheduleSaveRef.current();
+        if (keepSelection) syncFromObject(img);
+        retry?.();
+      });
+      return false;
+    },
+    [getActive, updateLayersNow, syncFromObject, toast]
+  );
 
   const apiAddImageFromFile = useCallback(
     (file: File) => {
@@ -1438,7 +1921,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const setAdjustment = useCallback(
     (key: AdjustmentKey, value: number) => {
       const obj = getActive();
-      if (!obj || obj.type !== 'image') return;
+      if (!obj) return;
+      // Adjust works on ANY object — non-images are rasterized once, then adjusted
+      if (obj.type !== 'image') {
+        if ((obj as any).type === 'activeSelection') return;
+        ensureAdjustableImage(() => setAdjustment(key, value));
+        return;
+      }
       const img = obj as fabric.Image;
       const type = ADJUST_TYPE[key];
       img.filters = (img.filters || []).filter((f: any) => f?.type !== type);
@@ -1451,7 +1940,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       canvasRef.current?.requestRenderAll();
       scheduleSaveRef.current();
     },
-    [getActive]
+    [getActive, ensureAdjustableImage]
   );
 
   const adjustImage = useCallback(
@@ -1462,7 +1951,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const applyFilterPreset = useCallback(
     (name: string) => {
       const obj = getActive();
-      if (!obj || obj.type !== 'image') return;
+      if (!obj) return;
+      // Filters work on ANY object — non-images are rasterized once, then filtered
+      if (obj.type !== 'image') {
+        if ((obj as any).type === 'activeSelection') return;
+        ensureAdjustableImage(() => applyFilterPreset(name));
+        return;
+      }
       const img = obj as fabric.Image;
       const preset = FILTER_PRESETS.find((p) => p.name === name);
       if (!preset) return;
@@ -1478,13 +1973,18 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       commitHistory();
       toast(`Filter: ${name}`, 'info');
     },
-    [getActive, commitHistory, toast]
+    [getActive, commitHistory, ensureAdjustableImage, toast]
   );
 
   const toggleRemoveColor = useCallback(
     (on: boolean) => {
       const obj = getActive();
-      if (!obj || obj.type !== 'image') return;
+      if (!obj) return;
+      if (obj.type !== 'image') {
+        if ((obj as any).type === 'activeSelection') return;
+        ensureAdjustableImage(() => toggleRemoveColor(on));
+        return;
+      }
       const img = obj as fabric.Image;
       img.filters = (img.filters || []).filter((f: any) => !f?.onyxRemove);
       if (on) {
@@ -1500,13 +2000,18 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       canvasRef.current?.requestRenderAll();
       commitHistory();
     },
-    [getActive, editorState.removeColorHex, editorState.removeColorDist, commitHistory]
+    [getActive, editorState.removeColorHex, editorState.removeColorDist, commitHistory, ensureAdjustableImage]
   );
 
   const setRemoveColor = useCallback(
     (hex: string, dist: number) => {
       const obj = getActive();
-      if (!obj || obj.type !== 'image') return;
+      if (!obj) return;
+      if (obj.type !== 'image') {
+        if ((obj as any).type === 'activeSelection') return;
+        ensureAdjustableImage(() => setRemoveColor(hex, dist));
+        return;
+      }
       const img = obj as fabric.Image;
       img.filters = (img.filters || []).map((f: any) => {
         if (f?.onyxRemove) {
@@ -1520,27 +2025,34 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       canvasRef.current?.requestRenderAll();
       scheduleSaveRef.current();
     },
-    [getActive]
+    [getActive, ensureAdjustableImage]
   );
 
   const holdCompare = useCallback(
     (hold: boolean) => {
       const obj = getActive();
-      if (!obj || obj.type !== 'image') return;
+      if (!obj) return;
+      if (obj.type !== 'image') {
+        if ((obj as any).type === 'activeSelection') return;
+        ensureAdjustableImage(() => holdCompare(hold));
+        return;
+      }
       const img = obj as fabric.Image;
       if (hold) {
         if (compareStashRef.current) return;
-        compareStashRef.current = img.filters || [];
+        // stash the OWNER too — a stale stash must never leak onto another image
+        compareStashRef.current = { obj: img, filters: img.filters || [] } as any;
         img.filters = [];
       } else {
-        if (!compareStashRef.current) return;
-        img.filters = compareStashRef.current;
+        const stash = compareStashRef.current as any;
+        if (!stash) return;
+        if (stash.obj === img) img.filters = stash.filters;
         compareStashRef.current = null;
       }
       img.applyFilters();
       canvasRef.current?.requestRenderAll();
     },
-    [getActive]
+    [getActive, ensureAdjustableImage]
   );
 
   /* object ops */
@@ -1686,7 +2198,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   /* ---------------- border stack (fancy multi-borders) ---------------- */
 
   const computeRings = (cfg: BorderStackConfig): BorderRing[] => {
-    const n = clamp(Math.round(cfg.count), 1, 6);
+    const n = clamp(Math.round(cfg.count), 1, MAX_BORDERS);
     if (cfg.mode === 'custom' && cfg.rings?.length) {
       return cfg.rings.slice(0, n).map((r) => ({ width: clamp(r.width, 1, 60), color: r.color }));
     }
@@ -1704,13 +2216,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   /** Unwrap a border-ring group → returns the core object (rings are dropped) */
   const unwrapRingGroup = useCallback((c: fabric.Canvas, group: fabric.Group): fabric.Object | null => {
     const items = [...group.getObjects()];
+    const gIdx = c.getObjects().indexOf(group);
     group.destroy();
     (group as any)._objects = [];
     c.remove(group);
     let core: fabric.Object | null = null;
     items.forEach((o) => {
       if ((o as any).onyxRingPart) return;
-      c.add(o);
+      // restore the core at the group's old stack position (no z-order jump)
+      c.insertAt(o, Math.max(0, Math.min(gIdx, c.getObjects().length)), false);
       o.setCoords();
       core = o;
     });
@@ -1718,13 +2232,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   }, []);
 
   /**
-   * Wrap the selected object in a stack of concentric outline rings.
+   * Wrap the selected object in a stack of concentric rings.
+   * ALL rings render into ONE offscreen canvas → ONE image layer — that is what
+   * makes up to 1024 borders viable (vs 1024 fabric objects).
+   * Ring geometry follows the object: circle/rect-radius/polygon shapes, or the
+   * object's crop shape (e.g. circle rings around a circle-cropped photo).
    * Re-applying on an existing ring group edits it (unwrap → re-wrap).
    */
   const applyBorderStack = useCallback(
-    async (cfg: BorderStackConfig) => {
+    (cfg: BorderStackConfig) => {
       const c = canvasRef.current;
-      if (!c) return;
+      if (!c || borderBusyRef.current) return;
       let target = getActive();
       if (!target) {
         toast('Select an object first', 'warning');
@@ -1734,119 +2252,130 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         toast('Select a single object to border it', 'warning');
         return;
       }
-
-      // Lock the WHOLE operation (unwrap included) so object:added / object:removed
-      // don't push spurious history entries with the core object missing.
-      isLockedRef.current = true;
-      const ringObjs: fabric.Object[] = [];
-      try {
-        if (target.type === 'group' && (target as any).onyxRing) {
+      if (target.type === 'group' && !(target as any).onyxRing) {
+        toast('Borders work on single objects — ungroup first', 'warning');
+        return;
+      }
+      // Unwrap an existing ring group so re-applying edits the SAME core object.
+      // Locked: unwrap fires object:added / object:removed.
+      if (target.type === 'group' && (target as any).onyxRing) {
+        isLockedRef.current = true;
+        try {
           const core = unwrapRingGroup(c, target as fabric.Group);
           if (!core) return;
           target = core;
-        } else if (target.type === 'group') {
-          toast('Borders work on single objects', 'warning');
-          return;
+        } finally {
+          isLockedRef.current = false;
         }
+      }
 
-        const rings = computeRings(cfg);
-        if (!rings.length) return;
+      const rings = computeRings(cfg);
+      if (!rings.length) return;
+      const bw = target.getScaledWidth();
+      const bh = target.getScaledHeight();
+      if (bw < 4 || bh < 4) {
+        toast('Object is too small to border', 'warning');
+        return;
+      }
+      const center = target.getCenterPoint();
+      const angle = target.angle || 0;
 
-        const bw = target.getScaledWidth();
-        const bh = target.getScaledHeight();
-        if (bw < 4 || bh < 4) {
-          toast('Object is too small to border', 'warning');
-          return;
-        }
-        const center = target.getCenterPoint();
-        const angle = target.angle || 0;
+      // Rings follow the object's bbox or its crop shape — a reversible MASK
+      // (clipPath) still has its full bbox, so hint at the real-crop flow.
+      if ((target as any).clipPath && !(target as any).onyxCropShape) {
+        toast('Tip: use Mask → Crop so borders follow the masked shape', 'info');
+      }
 
-        const cloneObj = (o: fabric.Object) =>
-          new Promise<fabric.Object | null>((res) => {
-            try {
-              o.clone((cl: fabric.Object) => res(cl));
-            } catch {
-              res(null);
-            }
-          });
+      // Ring geometry: center offset of each ring from the object edge
+      let acc = 0;
+      const layout = rings.map((r) => {
+        acc += r.width / 2;
+        const centerOff = acc;
+        acc += cfg.gap;
+        return { ...r, centerOff };
+      });
+      const outer = Math.max(1, ...layout.map((l) => l.centerOff + l.width / 2));
 
-        // Build ring objects: outermost added first (bottom of stack)
-        let offset = 0;
-        for (let i = 0; i < rings.length; i++) {
-          const { width, color } = rings[i];
-          offset += width / 2;
-          const ringW = bw + 2 * offset;
-          const ringH = bh + 2 * offset;
-          let ring: fabric.Object | null = null;
-          if (target!.type === 'image') {
-            const natW = (target as fabric.Image).width || bw;
-            const natH = (target as fabric.Image).height || bh;
-            ring = new fabric.Rect({
-              width: natW,
-              height: natH,
-              // images usually display scaled — match the ring to the on-screen size
-              scaleX: ringW / natW,
-              scaleY: ringH / natH,
+      // Render every ring into a single offscreen canvas.
+      // Hard cap 4096px/side — iOS Safari fails above ~16MP canvases.
+      const fullW = bw + 2 * outer;
+      const fullH = bh + 2 * outer;
+      const CAP = 4096;
+      const m = clamp(Math.min(3, CAP / Math.max(fullW, fullH)), 0.02, 3);
+      const rc = document.createElement('canvas');
+      rc.width = Math.max(2, Math.ceil(fullW * m));
+      rc.height = Math.max(2, Math.ceil(fullH * m));
+      const rctx = rc.getContext('2d');
+      if (!rctx) {
+        toast('Border render failed on this device — try fewer borders', 'error');
+        return;
+      }
+      rctx.lineJoin = 'round';
+      rctx.lineCap = 'round';
+      const trace = ringPathFor(target);
+      // Draw outermost first — inner rings overlap the seam, hiding hairline gaps
+      for (let i = layout.length - 1; i >= 0; i--) {
+        const l = layout[i];
+        const rw = (bw + 2 * l.centerOff) * m + 1.5;
+        const rh = (bh + 2 * l.centerOff) * m + 1.5;
+        rctx.save();
+        // paths are built in 0..rw × 0..rh space — center that box on the canvas
+        rctx.translate((rc.width - rw) / 2, (rc.height - rh) / 2);
+        rctx.lineWidth = Math.max(0.6, l.width * m);
+        rctx.strokeStyle = l.color;
+        rctx.stroke(trace(rw, rh));
+        rctx.restore();
+      }
+
+      borderBusyRef.current = true;
+      isLockedRef.current = true;
+      const myToken = ++lockTokenRef.current;
+      const targetIdx = c.getObjects().indexOf(target);
+      try {
+        const ringUrl = rc.toDataURL('image/png');
+        fabric.Image.fromURL(ringUrl, (ringImg: fabric.Image) => {
+          try {
+            // the user may have deleted / undone the target while the image loaded
+            if ((target as any).canvas !== c) return;
+            ringImg.set({
               originX: 'center',
               originY: 'center',
               left: center.x,
               top: center.y,
               angle,
-              fill: 'transparent',
-              stroke: color,
-              strokeWidth: width,
-              strokeUniform: true,
-              strokeLineJoin: 'round',
+              scaleX: 1 / m,
+              scaleY: 1 / m,
             } as any);
-          } else {
-            ring = await cloneObj(target!);
-            if (ring) {
-              ring.set({
-                originX: 'center',
-                originY: 'center',
-                left: center.x,
-                top: center.y,
-                angle,
-                scaleX: ringW / ((target as any).width || bw),
-                scaleY: ringH / ((target as any).height || bh),
-                fill: 'transparent',
-                stroke: color,
-                strokeWidth: width,
-                strokeUniform: true,
-                strokeLineJoin: 'round',
-                shadow: null,
-                backgroundColor: 'transparent',
-                opacity: 1,
-              } as any);
-            }
+            (ringImg as any).onyxRingPart = true;
+            c.remove(target!);
+            const group = new fabric.Group([ringImg, target!], {
+              name: `${(target as any).name || 'Object'} · bordered`,
+            } as any);
+            (group as any).onyxRing = true;
+            (group as any).onyxRingCfg = cfg;
+            // keep the layer where the target was (no z-order jump)
+            c.insertAt(group, Math.max(0, Math.min(targetIdx, c.getObjects().length)), false);
+            c.setActiveObject(group);
+            c.requestRenderAll();
+          } catch {
+            toast('Border failed — try a smaller stack', 'error');
+          } finally {
+            if (lockTokenRef.current === myToken) isLockedRef.current = false;
+            borderBusyRef.current = false;
           }
-          if (ring) {
-            (ring as any).onyxRingPart = true;
-            (ring as any).selectable = false;
-            ringObjs.unshift(ring); // unshift → outermost ends up first
+          if ((target as any).canvas === c) {
+            // History/save OUTSIDE the lock — saveHistory is a no-op while locked
+            updateLayersNow();
+            saveHistory();
+            scheduleSaveRef.current();
+            toast(`Applied ${rings.length} border${rings.length > 1 ? 's' : ''}`, 'success');
           }
-          offset += cfg.gap; // gap before the next ring
-        }
-
-        if (!ringObjs.length) return;
-
-        c.remove(target!);
-        const group = new fabric.Group([...ringObjs, target!], {
-          name: `${(target as any).name || 'Object'} · bordered`,
-        } as any);
-        (group as any).onyxRing = true;
-        (group as any).onyxRingCfg = cfg;
-        c.add(group);
-        c.setActiveObject(group);
-        c.requestRenderAll();
-      } finally {
+        });
+      } catch {
         isLockedRef.current = false;
+        borderBusyRef.current = false;
+        toast('Border render failed — try fewer/thinner borders', 'error');
       }
-      // History/save OUTSIDE the lock — saveHistory is a no-op while locked
-      updateLayersNow();
-      saveHistory();
-      scheduleSaveRef.current();
-      toast(`Applied ${ringObjs.length} border${ringObjs.length > 1 ? 's' : ''}`, 'success');
     },
     [getActive, unwrapRingGroup, updateLayersNow, saveHistory, toast]
   );
@@ -2089,6 +2618,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     const c = canvasRef.current;
     const obj = getActive();
     if (!c || !obj) return;
+    // CANVAS_EXTRA_PROPS keeps name/onyxRing/onyxCropShape/locks through the copy
     obj.clone((cloned: any) => {
       cloned.set({ left: (cloned.left || 0) + 24, top: (cloned.top || 0) + 24, evented: true });
       if (cloned.type === 'activeSelection') {
@@ -2100,7 +2630,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
       c.setActiveObject(cloned);
       c.requestRenderAll();
-    });
+    }, CANVAS_EXTRA_PROPS as any);
   }, [getActive]);
 
   const pasteClipboard = useCallback(() => {
@@ -2112,7 +2642,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       c.add(cloned);
       c.setActiveObject(cloned);
       c.requestRenderAll();
-    });
+    }, CANVAS_EXTRA_PROPS as any);
   }, []);
 
   /** Remove a single object or every object inside an ActiveSelection (multi-select) */
@@ -2127,6 +2657,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         c.discardActiveObject();
         members.forEach((o) => c.remove(o));
       } else {
+        // a locked layer is protected from accidental deletion
+        if ((a as any).lockMovementX) {
+          toast('Layer is locked — unlock it first', 'warning');
+          return;
+        }
         c.discardActiveObject();
         c.remove(a);
       }
@@ -2138,7 +2673,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     updateLayersNow();
     saveHistory();
     scheduleSaveRef.current();
-  }, [updateLayersNow, saveHistory]);
+  }, [updateLayersNow, saveHistory, toast]);
 
   const deleteSelected = useCallback(() => {
     const obj = getActive();
@@ -2278,12 +2813,21 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   /* crop & mask */
   const apiStartCrop = useCallback(() => {
     const obj = getActive();
-    if (!obj || obj.type !== 'image') {
-      toast('Select an image to crop', 'warning');
+    if (!obj) return;
+    if ((obj as any).type === 'activeSelection') {
+      toast('Select a single object to crop', 'warning');
+      return;
+    }
+    if (obj.type !== 'image') {
+      // Crop works on ANY object — rasterize shapes/text once first
+      ensureAdjustableImage(() => {
+        const o = getActive();
+        if (o && o.type === 'image') setCropData((o as fabric.Image).toDataURL({}));
+      });
       return;
     }
     setCropData((obj as fabric.Image).toDataURL({}));
-  }, [getActive, toast]);
+  }, [getActive, toast, ensureAdjustableImage]);
 
   const handleCrop = useCallback((croppedDataUrl: string) => {
     const obj = getActive();
@@ -2301,16 +2845,16 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     (maskType: 'rect' | 'circle' | 'triangle' | 'heart' | 'star') => {
       const c = canvasRef.current;
       const obj = getActive();
-      if (!c || !obj || obj.type !== 'image') {
-        toast('Select an image to mask', 'warning');
+      // Mask works on ANY single object (images, shapes, text) via clipPath
+      if (!c || !obj || (obj as any).type === 'activeSelection') {
+        toast('Select an object to mask', 'warning');
         return;
       }
-      const img = obj as fabric.Image;
-      maskTargetRef.current = img;
-      const w = img.width! * img.scaleX!;
-      const h = img.height! * img.scaleY!;
+      maskTargetRef.current = obj;
+      const w = obj.getScaledWidth();
+      const h = obj.getScaledHeight();
       const size = Math.min(w, h) * 0.8;
-      const center = img.getCenterPoint();
+      const center = obj.getCenterPoint();
 
       const commonOpts: any = {
         left: center.x,
@@ -2358,12 +2902,26 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         c.setActiveObject(maskShape);
         maskShapeRef.current = maskShape;
         setMenuState('MASK_EDIT');
-        img.set({ selectable: false, evented: false });
+        obj.set({ selectable: false, evented: false });
         c.requestRenderAll();
       }
     },
     [getActive, toast]
   );
+
+  /** Drop the temp mask shape + re-enable the target WITHOUT touching the menu.
+   *  Used whenever MASK_EDIT is left through a path other than its own buttons. */
+  const cancelMasking = useCallback(() => {
+    const c = canvasRef.current;
+    const shape = maskShapeRef.current;
+    if (!c || !shape) return;
+    const target = maskTargetRef.current;
+    if (target) target.set({ selectable: true, evented: true });
+    c.remove(shape);
+    maskShapeRef.current = null;
+    maskTargetRef.current = null;
+    c.requestRenderAll();
+  }, []);
 
   const finishMasking = useCallback(
     (apply: boolean) => {
@@ -2409,15 +2967,62 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           toast('Mask applied', 'success');
         });
       } else {
-        if (targetImg) targetImg.set({ selectable: true, evented: true });
-        c.remove(maskShape);
-        maskShapeRef.current = null;
-        maskTargetRef.current = null;
-        c.requestRenderAll();
+        cancelMasking();
       }
       setMenuState('HOME');
     },
-    [commitHistory, updateLayersNow, toast]
+    [cancelMasking, commitHistory, updateLayersNow, toast]
+  );
+
+  /* Leaving MASK_EDIT through ANY path (rail click, palette, tool shortcut…)
+     must clean up the temp shape — otherwise it stays on the canvas (and in
+     exports) and the target stays unclickable. */
+  useEffect(() => {
+    if (menu !== 'MASK_EDIT') cancelMasking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu]);
+
+  /* ---------------- true shape crop (rasterized — works on ANY object) ---------------- */
+  const applyShapeCrop = useCallback(
+    (spec: CropShapeSpec) => {
+      const c = canvasRef.current;
+      const obj = getActive();
+      if (!c || !obj) {
+        toast('Select an object first', 'warning');
+        return;
+      }
+      if ((obj as any).type === 'activeSelection') {
+        toast('Select a single object to crop', 'warning');
+        return;
+      }
+      rasterizeObjectToImage(obj, spec).then((img) => {
+        if (!img) {
+          toast('Crop failed — try again', 'error');
+          return;
+        }
+        // the user may have deleted / undone the object mid-flight
+        if ((obj as any).canvas !== c) return;
+        const idx = c.getObjects().indexOf(obj);
+        const keepSelection = !c.getActiveObject() || c.getActiveObject() === obj;
+        const myToken = ++lockTokenRef.current;
+        isLockedRef.current = true;
+        try {
+          c.remove(obj);
+          // keep the layer where the object was (no z-order jump)
+          c.insertAt(img, Math.max(0, Math.min(idx, c.getObjects().length)), false);
+          if (keepSelection) c.setActiveObject(img);
+          c.requestRenderAll();
+        } finally {
+          if (lockTokenRef.current === myToken) isLockedRef.current = false;
+        }
+        updateLayersNow();
+        saveHistory();
+        scheduleSaveRef.current();
+        if (keepSelection) syncFromObject(img);
+        toast(`Cropped to ${spec.shape}${spec.shape === 'polygon' ? ` (${clamp(spec.sides || 6, 3, 20)} sides)` : ''}`, 'success');
+      });
+    },
+    [getActive, updateLayersNow, saveHistory, syncFromObject, toast]
   );
 
   /* zoom api */
@@ -2470,8 +3075,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 
   /* export api */
   const exportImage = useCallback(
-    async (opts: ExportOptions) => {
-      const heavy = (opts.targetW || docSizeRef.current.width * (opts.scale || 1)) * (opts.targetH || docSizeRef.current.height * (opts.scale || 1)) > 40e6;
+    async (opts: ExportOptions): Promise<boolean> => {
+      const heavy =
+        (opts.targetW || (opts.region ? opts.region.width : docSizeRef.current.width) * (opts.scale || 1)) *
+          (opts.targetH || (opts.region ? opts.region.height : docSizeRef.current.height) * (opts.scale || 1)) >
+        40e6;
       if (heavy) toast('Rendering large export — hold on…', 'info');
       let out: { url: string; w: number; h: number } = { url: '', w: 0, h: 0 };
       try {
@@ -2483,36 +3091,54 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           targetHeight: opts.targetH,
           transparent: opts.transparent,
           shape: opts.shape,
+          shapeSides: opts.shapeSides,
+          region: opts.region,
         });
       } catch {
         toast('Export failed — try a smaller size', 'error');
-        return;
+        return false;
       }
       if (!out.url || out.url.length < 64) {
         toast('Export failed — this device can not render that size', 'error');
-        return;
+        return false;
       }
       const ext = opts.format === 'jpeg' ? 'jpg' : opts.format;
       if (opts.mode === 'copy') {
         try {
           const blob = await (await fetch(out.url)).blob();
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          // label the clipboard payload with the REAL mime type
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob } as any)]);
           toast('Copied to clipboard', 'success');
         } catch {
           toast('Clipboard not available in this browser', 'error');
+          return false;
         }
       } else {
         const link = document.createElement('a');
-        link.download = `${slugify(projectNameRef.current)}${opts.shape && opts.shape !== 'none' ? `-${opts.shape}` : ''}.${ext}`;
+        link.download = `${slugify(projectNameRef.current)}${opts.region ? '-pick' : ''}${
+          opts.shape && opts.shape !== 'none' ? `-${opts.shape}` : ''
+        }.${ext}`;
         link.href = out.url;
         link.click();
         // Report the REAL (capped) dimensions, not the requested ones
         toast(`Exported ${out.w} × ${out.h} ${ext.toUpperCase()}`, 'success');
       }
       scheduleSaveRef.current();
+      return true;
     },
     [renderDocDataURL, toast]
   );
+
+  /** PNG snapshot of the whole document — Pick-export preview */
+  const docPreviewUrl = useCallback(() => {
+    try {
+      const { width: dw, height: dh } = docSizeRef.current;
+      const s = clamp(1600 / Math.max(dw, dh), 0.05, 1.5);
+      return renderDocDataURL({ format: 'png', quality: 0.92, scale: s }).url;
+    } catch {
+      return '';
+    }
+  }, [renderDocDataURL]);
 
   const renameProject = useCallback(
     (name: string) => {
@@ -2560,6 +3186,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       startCrop: apiStartCrop,
       startMasking,
       finishMasking,
+      applyShapeCrop,
       holdCompare,
       setDocSize: (w, h) => {
         applyDocSize(Math.max(16, Math.round(w)), Math.max(16, Math.round(h)), { centerContent: true });
@@ -2602,6 +3229,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       commitHistory,
       openExport: () => setMenuState('EXPORT'),
       exportImage,
+      docPreviewUrl,
       renameProject,
       goHome: () => router.push('/'),
       openDashboardSidebar: () => setSidebarOpen(true),
@@ -2616,11 +3244,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       setRemoveColor, apiStartCrop, startMasking, finishMasking, holdCompare, applyDocSize,
       commitHistory, setDocBackground, openBgPickerFn, apiZoomIn, apiZoomOut, zoomFitApi,
       apiZoom100, addText, addShape, addSticker, addSolidLayer, addGradientLayer, updateTransform,
-      apiToggleDraw, apiDuplicate, deleteSelected,
+      apiToggleDraw, apiDuplicate, deleteSelected, applyShapeCrop,
       flip, rotate90, lockToggle, apiOrder, align, selectLayer, toggleLayerVisibility,
       reorderLayer, setLayerIndex, renameLayer, clearBgImage, addPolygon,
       applyBorderStack, removeBorderStack, setObjectGradientFill, setObjectImageFill, setObjectSolidFill,
-      undo, redo, exportImage, renameProject, router,
+      undo, redo, exportImage, docPreviewUrl, renameProject, router,
     ]
   );
 
@@ -2663,6 +3291,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           >
             <canvas ref={containerRef} />
 
+            {/* Transform badge: live angle / size readout while rotating or scaling */}
+            <div
+              ref={badgeRef}
+              className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-indigo-400/40 bg-onyx-950/90 px-2 py-0.5 font-mono text-[11px] font-bold text-indigo-200 opacity-0 shadow-lg transition-opacity duration-150"
+              style={{ left: 0, top: 0 }}
+            />
+
             {/* Dropzone ring */}
             {dragOver && (
               <div className="pointer-events-none absolute inset-3 z-20 rounded-2xl border-2 border-dashed border-indigo-400 bg-indigo-500/10">
@@ -2677,11 +3312,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
             <ZoomControls />
 
             {/* Mobile bottom sheet for the active tool */}
-            {sheetOpen && (
-              <div className="absolute inset-x-0 bottom-0 z-30 md:hidden">
-                <Sheet>{menu === 'LAYERS' ? <LayersList /> : renderToolPanel(menu)}</Sheet>
-              </div>
-            )}
+            <AnimatePresence>
+              {sheetOpen && (
+                <div key="mobile-sheet" className="absolute inset-x-0 bottom-0 z-30 md:hidden">
+                  <Sheet showHandle={menu === 'LAYERS'}>{menu === 'LAYERS' ? <LayersList /> : renderToolPanel(menu)}</Sheet>
+                </div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Right properties panel (desktop) */}
@@ -2708,7 +3345,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 /* Mobile bottom sheet wrapper                                         */
 /* ------------------------------------------------------------------ */
 
-const Sheet: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const Sheet: React.FC<{ children: React.ReactNode; showHandle?: boolean }> = ({ children, showHandle }) => {
   const { menu, setMenu, setSubTool, finishMasking } = useEditor();
   return (
     <motion.div
@@ -2718,23 +3355,29 @@ const Sheet: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       transition={{ type: 'spring', damping: 32, stiffness: 360 }}
       className="glass max-h-[46dvh] overflow-hidden rounded-t-2xl border-t border-white/10 shadow-2xl shadow-black/60"
     >
-      <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
-        <div className="h-1 w-10 rounded-full bg-white/20" />
-        <button
-          onClick={() => {
-            // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
-            if (menu === 'MASK_EDIT') finishMasking(false);
-            else {
-              setMenu('HOME');
-              setSubTool(null);
-            }
-          }}
-          aria-label="Close panel"
-          className="rounded-full p-1.5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <FaXmark size={14} />
-        </button>
-      </div>
+      {/* Only the LAYERS sheet needs its own handle/close — for tool sheets the
+          MobileToolbar owns the handle row + Done button (single close affordance). */}
+      {showHandle ? (
+        <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
+          <div className="h-1 w-10 rounded-full bg-white/20" />
+          <button
+            onClick={() => {
+              // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
+              if (menu === 'MASK_EDIT') finishMasking(false);
+              else {
+                setMenu('HOME');
+                setSubTool(null);
+              }
+            }}
+            aria-label="Close panel"
+            className="rounded-full p-1.5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <FaXmark size={14} />
+          </button>
+        </div>
+      ) : (
+        <div className="h-1.5" aria-hidden />
+      )}
       <div className="max-h-[40dvh] overflow-y-auto px-4 pb-5 safe-area-pb">{children}</div>
     </motion.div>
   );

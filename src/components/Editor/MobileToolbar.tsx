@@ -2,10 +2,12 @@
 
 import React from 'react';
 import clsx from 'clsx';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   FaPlus, FaFont, FaShapes, FaPen, FaFaceSmile, FaLayerGroup, FaCropSimple,
   FaSliders, FaWandMagicSparkles, FaPalette, FaTrashCan, FaArrowDownUpAcrossLine,
   FaArrowLeft, FaClone, FaClapperboard, FaMask,
+  FaArrowsLeftRight, FaArrowsUpDown, FaArrowRotateLeft, FaArrowRotateRight,
 } from 'react-icons/fa6';
 import { useEditor, MenuTab } from './EditorContext';
 
@@ -40,14 +42,33 @@ const Btn: React.FC<{
   </button>
 );
 
+/** Compact quick-action pill for the selection bar */
+const Quick: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}> = ({ icon, label, onClick, danger }) => (
+  <button
+    onClick={onClick}
+    aria-label={label}
+    className="flex h-11 w-[58px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-white/10 bg-zinc-800/80 text-zinc-200 transition-all active:scale-90 active:bg-zinc-700"
+  >
+    <span className={clsx('text-sm leading-none', danger && 'text-red-400')}>{icon}</span>
+    <span className={clsx('text-[8px] font-bold uppercase tracking-wide', danger ? 'text-red-400' : 'text-zinc-400')}>{label}</span>
+  </button>
+);
+
 /**
  * Mobile bottom toolbar: primary tools, horizontally scrollable with fade mask.
- * Object-specific tools appear contextually when something is selected.
+ * Selecting an object pops up a smooth transform quick-bar above the tools.
  */
 export const MobileToolbar: React.FC = () => {
-  const { menu, setMenu, setSubTool, activeObj, addText, toggleDraw, startCrop, isDrawing, duplicate, deleteSelected, finishMasking } = useEditor();
+  const {
+    menu, setMenu, setSubTool, activeObj, addText, toggleDraw, startCrop, isDrawing,
+    duplicate, deleteSelected, finishMasking, flip, rotate90,
+  } = useEditor();
 
-  const isImage = activeObj?.type === 'image';
   const isText = activeObj?.type === 'i-text' || activeObj?.type === 'text';
   const hasObj = !!activeObj;
   const sheetOpen = menu !== 'HOME' && menu !== 'EXPORT' && menu !== 'LAYERS';
@@ -82,6 +103,30 @@ export const MobileToolbar: React.FC = () => {
         </div>
       )}
 
+      {/* Selection quick-bar: fast transforms while an object is selected.
+          Slides in with a spring — no layout jump, feels native. */}
+      <AnimatePresence initial={false}>
+        {hasObj && !sheetOpen && (
+          <motion.div
+            key="selbar"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: 'spring', damping: 32, stiffness: 380 }}
+            className="overflow-hidden"
+          >
+            <div className="mask-fade-x flex items-center gap-1 overflow-x-auto px-2.5 pt-2 hide-scroll">
+              <Quick icon={<FaClone />} label="Copy" onClick={duplicate} />
+              <Quick icon={<FaArrowsLeftRight />} label="Flip ↔" onClick={() => flip('X')} />
+              <Quick icon={<FaArrowsUpDown />} label="Flip ↕" onClick={() => flip('Y')} />
+              <Quick icon={<FaArrowRotateLeft />} label="−90°" onClick={() => rotate90(-1)} />
+              <Quick icon={<FaArrowRotateRight />} label="+90°" onClick={() => rotate90(1)} />
+              <Quick icon={<FaTrashCan />} label="Delete" onClick={deleteSelected} danger />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="mask-fade-x flex items-center gap-0.5 overflow-x-auto px-2 py-1.5 hide-scroll">
         {sheetOpen ? (
           <Btn icon={<FaArrowLeft />} label="Done" onClick={done} active />
@@ -105,23 +150,16 @@ export const MobileToolbar: React.FC = () => {
             <Btn icon={<FaClapperboard />} label="Doc" onClick={() => open('DOCUMENT')} active={m === 'DOCUMENT'} />
             <Btn icon={<FaPalette />} label="Bg" onClick={() => open('BG')} active={m === 'BG'} />
 
-            {isImage && (
+            {/* Object tools — work on ANY object now (images, shapes, text) */}
+            {hasObj && (
               <>
                 <span className="mx-1 h-9 w-px shrink-0 bg-white/10" />
                 <Btn icon={<FaCropSimple />} label="Crop" onClick={startCrop} />
                 <Btn icon={<FaMask />} label="Mask" onClick={() => open('MASK')} active={m === 'MASK'} />
                 <Btn icon={<FaSliders />} label="Adjust" onClick={() => open('ADJUST')} active={m === 'ADJUST'} />
                 <Btn icon={<FaWandMagicSparkles />} label="Filter" onClick={() => open('FILTER')} active={m === 'FILTER'} />
-              </>
-            )}
-
-            {hasObj && (
-              <>
-                <span className="mx-1 h-9 w-px shrink-0 bg-white/10" />
                 <Btn icon={<FaPalette />} label="Style" onClick={() => open('STYLE')} active={m === 'STYLE'} />
                 <Btn icon={<FaArrowDownUpAcrossLine />} label="Arrange" onClick={() => open('ARRANGE')} active={m === 'ARRANGE'} />
-                <Btn icon={<FaClone />} label="Clone" onClick={duplicate} />
-                <Btn icon={<FaTrashCan />} label="Delete" onClick={deleteSelected} danger />
               </>
             )}
           </>

@@ -1,4 +1,4 @@
-# ONYX v2.1 — Project Structure
+# ONYX v2.2 — Project Structure
 
 > File map + short docs for future agents (or future you).
 > Stack: **Next.js 16 (App Router, static export) · React 19 · Tailwind v4 · Fabric.js 5 · framer-motion · IndexedDB (idb) · react-cropper**
@@ -46,14 +46,15 @@ ONYX-Image-Editor-main/
     │   │   ├── TopBar.tsx           ← logo, inline project rename, save-state pill, undo/redo, zoom%, palette btn, Export
     │   │   ├── DesktopRail.tsx      ← left vertical tool rail (md+): 15 tools (incl. Document + BG), Tooltip+shortcut, contextual disable (needs image/object)
     │   │   ├── PropertiesPanel.tsx  ← right panel (md+): contextual tab chips (image/text/shape/none) + tool content + collapsible layers
-    │   │   ├── MobileToolbar.tsx    ← bottom toolbar (<md): scrollable icon row; contextual groups (image: Crop/Mask/Adjust/Filter; text: re-format; object: Style/Arrange/Clone/Delete)
-    │   │   ├── LayersPanel.tsx      ← LayersList (shared): thumbs, inline rename, eye, lock, position slider (0=bottom ↔ top) + order arrows
+    │   │   ├── MobileToolbar.tsx    ← bottom toolbar (<md): scrollable icon row; animated selection quick-bar (Copy/Flip↕↔/±90°/Delete); object tools (Crop/Mask/Adjust/Filter) for ANY object
+    │   │   ├── LayersPanel.tsx      ← LayersList (shared): Canva-style drag-to-reorder (⠿ handle + keyboard ↑/↓), thumbs, inline rename, eye, lock
     │   │   ├── ZoomControls.tsx     ← floating −/%/+/fit cluster (bottom-right of canvas)
     │   │   ├── EmptyState.tsx       ← onboarding overlay: dropzone + presets + ratio chips incl. 2:3 (hidden once layers exist)
     │   │   ├── ExportPanel.tsx      ← modal: PNG/JPG/WebP, quality, 0.5–4× + 16K chips + ratio input, exact-px resize (aspect lock), shape pick (9 masks), transparent PNG, copy-to-clipboard, live capped dims
     │   │   ├── ShortcutsModal.tsx   ← "?" cheat sheet from SHORTCUTS
     │   │   ├── CommandPalette.tsx   ← Ctrl+K fuzzy actions (tools, filters, presets, zoom, help)
     │   │   ├── CropModal.tsx        ← react-cropper fullscreen + ratio chips + Escape + ready-guard
+    │   │   ├── PickExportModal.tsx  ← full-viewport region picker: drag/resize box over a doc snapshot, shape masks (incl. n-gon), resolution to 16K, busy-guarded export
     │   │   ├── EditorClient.tsx     ← dynamic(ssr:false) + Suspense + epoch-keyed remount on document switches (adoption-aware: URL rewrite on first scratch autosave does NOT remount)
     │   │   └── panels/
     │   │       └── ToolPanels.tsx   ← 13 panel contents (Add/Document/BG/Text/Shape/Draw/Sticker/Adjust/Filter/Mask/MaskEdit/Arrange/Style — Shape has n-gon/star, Style has fills + BorderStackBuilder) + renderToolPanel() + PANEL_TITLES — used by BOTH desktop panel & mobile sheets

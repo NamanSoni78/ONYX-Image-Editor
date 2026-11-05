@@ -259,6 +259,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: '1', action: 'Zoom 100%', group: 'View' },
   { keys: 'Arrow keys', action: 'Nudge 1px (Shift = 10px)', group: 'Edit' },
   { keys: '[ / ]', action: 'Send backward / forward', group: 'Edit' },
+  { keys: 'Rotate handle', action: 'Snaps to 45° steps (hold Shift = free)', group: 'Tools' },
+  { keys: 'Drag layer rows', action: 'Reorder layers (Canva-style)', group: 'Edit' },
   { keys: '?', action: 'Shortcut cheat sheet', group: 'Help' },
   { keys: 'Esc', action: 'Deselect / close panel / cancel mask', group: 'Help' },
 ];

@@ -124,3 +124,43 @@
 ### E3. False alarms (investigated, not bugs)
 
 - `setLayerIndex` splice math (live `_objects`), image/pattern fill round-trip (fabric serializes pattern canvases to dataURL), gradient fill round-trip, polygon/star NaN guards (n≥3 clamps), undo/redo selection cleanup, clipboard PNG hardcode (panel blocks non-PNG copy), no retina double-scaling (`enableRetinaScaling:false`), footer URLs (byte-exact), favicon wiring (ICO + PNGs + manifest + apple-touch all present), v2.0→v2.1 project compatibility (extra props revive natively).
+
+---
+
+## F. v2.2 round — user-reported + parallel-subagent-hunted bugs
+
+Fixed during the v2.2 feature round (3 hunters, 24 findings — all fixed, browser-verified):
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 50 | **Viewport transform leaked into the shape-crop raster** — `getBoundingRect(false)` in fabric v5 INCLUDES the viewport, so zoom 1.66 produced a 1.66× bloated, misplaced crop | Use `getBoundingRect(true, true)` (document coords) everywhere in the raster engine |
+| 51 | **Border rings rendered only the bottom-right quadrant** — `rctx.translate(cx, cy)` moved the origin but ring paths were built in 0..w space | Translate by `(canvas−ring)/2` so the 0..rw path box is centered |
+| 52 | **Ctrl+Z died after touching any slider** — `domTyping()` treated focused range inputs as typing | range/color/checkbox inputs are non-typing for modifier combos; plain keys get the same treatment (v2.2.1) while text inputs + fabric editing stay protected |
+| 53 | Rasterize on first slider tick could run N times (one per tick) → duplicate layers + toast spam | `rasterBusyRef` in-flight guard |
+| 54 | Undo/Delete/selection-change during the async border/raster/crop window resurrected objects, corrupted history or stomped selection | `obj.canvas === c` attachment checks + lock ownership tokens (`lockTokenRef`) |
+| 55 | Duplicate/paste dropped `onyxRing/onyxCropShape/name/locks` | `clone(cb, CANVAS_EXTRA_PROPS)` |
+| 56 | Leaving MASK_EDIT via rail/palette/tool keys stranded the temp mask shape on canvas (it exported!) and left the target unclickable | `cancelMasking()` + menu-change effect; plain shortcuts blocked while masking |
+| 57 | Shadows clipped by the raster bounding box | bound padded by `blur + max(offsetX,offsetY)` |
+| 58 | Crop / rasterize / border apply / remove sent layers to the TOP of the stack | `insertAt(idx)` preserves z-order |
+| 59 | Extreme border configs (1024 × 30 px × gap 24) built ~8000 px canvases → iOS `getContext` null crash + a poisoned busy flag | 4096 px hard cap, null-context guard, try/catch always resets the flag |
+| 60 | hold-compare stash leaked a deleted image's filters onto the NEXT selected image | stash `{obj, filters}`, restore only on the same object |
+| 61 | **Pick-export modal rendered inside the export Modal** — the glass panel's backdrop-filter became the containing block, shrinking the "full-screen" picker to ~448 px (and the outer backdrop stayed clickable) | Hoisted to a sibling of `<Modal>` — verified 1440×900 = viewport |
+| 62 | WebP chip offered on non-WebP browsers (silent PNG fallback) in the pick modal | Same capability gate as the export panel |
+| 63 | Layer drag handle had no keyboard path; `reorderLayer` orphaned | Enter selects, ↑/↓ reorder |
+| 64 | Layer row ids derived from stack index → full remount on every reorder, drops could silently no-op mid-drag | stable `onyxUid` (persisted) |
+| 65 | "Square" crop produced the full bbox (16:9 in → 16:9 out) | True inscribed square (600×400 → 400×400) |
+| 66 | Pick export: double-click during a 16K render double-exported; a FAILED export still closed the picker (settings lost) | busy-guard + `exportImage` returns success, close only on success |
+| 67 | After resizing the picked region, a stale 16K multiplier silently applied (no chip selected) | `applyBox` resets the multiplier |
+| 68 | Mobile: three close affordances (toolbar Done ×2 + Sheet ✕) | MobileToolbar owns tool-sheet closing; only LAYERS keeps a handle |
+| 69 | Mobile tool sheet had an exit animation that never played (no AnimatePresence) | wrapped, keyed, plays |
+| 70 | Desktop rail/panel still gated Adjust/Filters/Mask to images while the engine + mobile accepted any object | rail `needsObject`, tabs for shape/text |
+| 71 | Locked layers deletable via Delete key / quick-bar | single-object delete refuses with a toast |
+| 72 | Desktop LAYERS rail button showed an empty placeholder | panel renders `LayersList` for LAYERS |
+| 73 | Service worker still cached as v2.1.0 | bumped to `onyx-v2.2.0` |
+| 74 | Transform badge invisible when the object touched the viewport top | clamped + transform flip |
+| 75 | Clipboard copy labeled JPEG/WebP bytes as `image/png` | labeled with the real blob MIME |
+| 76 | Per-border mode kept count=1024 → 1024 default-white rings | switching modes clamps count to 64 |
+
+### F2. Investigated, not bugs (this round)
+
+Escape nesting (pick modal's capture-phase listener wins — one consumer), pointer-capture on pick handles (events bubble to the stage), MaskPanel hooks-before-returns (legal), BorderStackBuilder re-seed pattern (sanctioned adjust-state-during-render), flip/rotate on ActiveSelection (fabric bakes the matrix on deselect), z-index of the pick modal (child stacking context paints above), SHORTCUTS accuracy, CommandPalette actions, layout viewport, `CropShapeSpec.sides` always-passed (clamped + only read for polygon).

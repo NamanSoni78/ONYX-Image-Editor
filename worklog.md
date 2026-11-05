@@ -129,3 +129,49 @@ Dispatched 3 general-purpose subagents in parallel (canvas core / export+panels 
 
 - `tsc --noEmit` → 0 errors · ESLint (React Compiler rules) → 0 errors · `next build` → 4/4 static routes.
 - Browser regression (agent-browser + pixel analysis), all ✅: transparent PNG corners [0,0,0,0]; JPG white (not black) with transparent on; To-bottom/backward visibility; bg image layer visible + exported + undoable; doc bg color undo + panel state sync; 45° gradient direction; triangle mask inscribed (not stretched) on 3:2; ring group 744×511 around a 700px image; custom W/H typing; Ctrl+Z-in-input guard; New Project fresh editor (project + scratch paths); adoption race (image + pattern frame + docW survive); multi-select delete + undo.
+
+---
+
+# ONYX v2.2 — Worklog
+
+## Phase 12 — v2.2 feature round (user request)
+
+- **Border stacks up to 1024** — engine rewrite: ALL rings render into ONE offscreen canvas → a single fabric.Image layer inside the ring group (vs 1024 fabric objects). `ringPathFor()` picks ring geometry per target: crop shape → traced shape, circle → ellipse, polygon → n-gon from normalized points, rect → radius-aware rounded rect, else rect. Slider (1–24) + exact N input (1–1024 gradient / 1–64 per-border). Canvas hard-capped at 4096 px/side (iOS-safe), `borderBusyRef` re-entrancy guard, try/catch never poisons it.
+- **True shape crop (any object)** — new raster engine (`rasterizeToCanvas` + `rasterizeObjectToImage`): clone → StaticCanvas at zoom m → shape clip via `traceCropPath` with TIGHT bounding box → new fabric.Image with `onyxCropShape` metadata. Rotation/opacity/shadow baked; lock state + name carry over; shadow-aware bound padding. `applyShapeCrop()` = destructive crop for images, shapes, text and groups; borders applied afterwards FOLLOW the cropped outline (circle crop → circle rings, pixel-verified: 735×735, zero corner pixels).
+- **Mask panel → Mask & Crop** — segmented Mask (reversible clipPath, now works on ANY object incl. shapes/text) vs Crop (real cut) with 10 shapes + polygon sides stepper (3–20). `cancelMasking()` + a menu-change effect guarantee cleanup through EVERY exit path (rail, palette, tool keys — previously stranded the temp shape on canvas/exports).
+- **Adjust / Filter / Crop for shapes & text** — `ensureAdjustableImage()` rasterizes non-images once (busy-guarded, attachment-checked, single undo step) then applies filters; Adjust/Filters panels + desktop rail + mobile toolbar now enable for every object type.
+- **Pick export** — new `PickExportModal` (full-viewport, mask-style): drag/resize a region over a live doc snapshot, 10 shape masks with SVG preview, resolution chips (1×/2×/4×/16K) + custom W/H with ratio lock, 16 384 px & 268 MP caps, PNG/JPG/WebP + transparent. `renderDocDataURL()` gained `region` + `shapeSides`. Export button is busy-guarded and only closes on success. Verified: 16 384 × 10 923 circle-mask PNG with 47.6% transparency (geometrically exact).
+- **Layers, Canva-style** — rewrote `LayersList`: pointer-drag reordering with live row shifts (⠿ handle), keyboard ↑/↓/Enter support, stable `onyxUid` ids (no remounts, drops never no-op), eye/lock/rename kept. The v2.1 position slider is gone (replaced by the drag the user actually asked for).
+- **Transform UX** — 45° rotation snap within 4° (Shift = free) with live angle badge (`45° ✓`, direct-DOM, clamped at viewport top); W×H badge while scaling; Canva-style pink center/edge snap guides drawn on `contextTop` (zero fabric objects, zero history noise); ±45°/±90° chips in Arrange.
+- **Mobile selection bar** — animated quick-bar (Copy / Flip ↔ / Flip ↕ / −90° / +90° / Delete) above the toolbar whenever an object is selected; tool sheet now has ONE close affordance (MobileToolbar owns Done; only LAYERS sheet keeps its own handle); `AnimatePresence` exit animation actually plays.
+- Shell: polygon export shape (3–20 sides) in Export panel + pick modal, WebP capability gate in both, hero badge v2.2, SW cache `onyx-v2.2.0`.
+
+## Phase 13 — Parallel bug hunt (3 subagents) + fixes
+
+Hunters A (canvas core) / B (panels+export) / C (shell+mobile) returned 24 findings; all triaged and fixed:
+
+- [A1] rasterize in-flight guard (duplicate layers + toast spam on first slider drag).
+- [A2] async callbacks re-validate `obj.canvas` + lock ownership TOKENS (undo/delete/selection-change mid-flight can no longer resurrect objects, corrupt history or stomp selection).
+- [A3] duplicate/paste keep `CANVAS_EXTRA_PROPS` (border groups stay editable, cropShape/locks/names survive copy).
+- [A4] MASK_EDIT cleanup centralized (see above).
+- [A5] shadow padding in rasterize (glows no longer clipped).
+- [A6] z-order preserved via `insertAt` on crop / rasterize / border apply / unwrap / remove.
+- [A7] ring canvas 4096 cap + null-context guard + poison-proof busy flag.
+- [A8] hold-compare stashes `{obj, filters}` (stale stash can't leak onto another image).
+- [A9] clipPath-masked objects get a "use Crop" hint when bordering.
+- [A10] clipboard copy labeled with the real blob MIME.
+- [A12] transform badge clamped into the viewport.
+- [B1] PickExportModal hoisted OUT of the Export Modal (glass/backdrop-filter made the panel the containing block — picker was 448 px, now verified 1440×900 = viewport).
+- [B2] WebP gated by capability in the pick modal.
+- [B3] layer reorder via keyboard (↑/↓) + Enter select.
+- [B4] Per-border mode clamps count to 64.
+- [B5] stable `onyxUid` layer ids.
+- [B6] "Square" crop is now a TRUE inscribed square (600×400 → 400×400, verified).
+- [B7/B8] pick export busy-guard, close-on-success only, mult reset on region change.
+- [B9] aria-pressed on shape/format/resolution chips.
+- [C1] one close affordance per sheet; [C2] AnimatePresence exit; [C3] desktop rail/panel open Adjust/Filters/Mask for ANY object; [C4] SW v2.2.0; [C5] hero badge; [C6] plain shortcuts live over range/color inputs (Ctrl+Z after slider touch, Escape/tool keys too) while text inputs + fabric editing stay protected, arrows defer to focused inputs; [C7] locked layers refuse Delete with a toast; [C8] desktop LAYERS rail renders the list; [C9] dead `ExportShapeLocal` + duplicate deps removed.
+
+## Phase 14 — Verification (all green)
+
+- `tsc --noEmit` → 0 errors · ESLint → 0 errors 0 warnings · `next build` → clean, 4/4 static routes.
+- Browser regression (agent-browser + pixel analysis): circle crop 400×400 @ (100,0) exact · circle rings 735×735 aspect 1.000, 0 corner px, dense at compass points · 1024 borders in ~1.4 s · layers drag (Circle below Text, canvas + list agree) · rotation drag to 47° → snapped 45° + badge `45° ✓` + hides on release · pick export 16 384×10 923 circle RGBA (corners [0,0,0,0]) · shape adjust rasterize (circle → image + Brightness) · ONE Ctrl+Z restores the vector original (with the slider still focused) · pick modal full-viewport · square crop 400×400 · locked Delete refused.

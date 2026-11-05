@@ -48,7 +48,26 @@ export type ExportShape =
   | 'heart'
   | 'hexagon'
   | 'pentagon'
-  | 'diamond';
+  | 'diamond'
+  | 'polygon';
+
+/** Upper bound for the border-stack builder ("n number of borders") */
+export const MAX_BORDERS = 1024;
+
+/** A true (destructive, rasterized) shape crop applied to any object */
+export interface CropShapeSpec {
+  shape: Exclude<ExportShape, 'none'>;
+  /** polygon sides (3–20), only used when shape = 'polygon' */
+  sides?: number;
+}
+
+/** Rectangular region of the document grabbed by the Pick-export modal (doc px) */
+export interface ExportRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 export interface ExportOptions {
   format: 'png' | 'jpeg' | 'webp';
@@ -61,6 +80,10 @@ export interface ExportOptions {
   targetH?: number;
   transparent: boolean;
   shape?: ExportShape;
+  /** polygon sides when shape = 'polygon' */
+  shapeSides?: number;
+  /** grab just this region of the document (Pick export) */
+  region?: ExportRegion;
   mode: 'download' | 'copy';
 }
 
@@ -72,7 +95,7 @@ export interface BorderRing {
 
 /** Configuration for the fancy multi-border feature */
 export interface BorderStackConfig {
-  /** number of borders, 1–6 */
+  /** number of borders, 1–1024 */
   count: number;
   /** 'gradient' = ramp between colorA/colorB · 'custom' = per-border colors/widths */
   mode: 'gradient' | 'custom';
@@ -120,6 +143,8 @@ export interface EditorAPI {
   startCrop: () => void;
   startMasking: (shape: 'rect' | 'circle' | 'triangle' | 'heart' | 'star') => void;
   finishMasking: (apply: boolean) => void;
+  /** true (rasterized) shape crop — works on images, shapes, text and groups */
+  applyShapeCrop: (spec: CropShapeSpec) => void;
   holdCompare: (hold: boolean) => void;
 
   /* ---- canvas / document ---- */
@@ -174,7 +199,9 @@ export interface EditorAPI {
 
   /* ---- export & persistence ---- */
   openExport: () => void;
-  exportImage: (opts: ExportOptions) => Promise<void>;
+  exportImage: (opts: ExportOptions) => Promise<boolean>;
+  /** PNG data-url snapshot of the whole document (Pick-export preview) */
+  docPreviewUrl: () => string;
   renameProject: (name: string) => void;
   goHome: () => void;
   openDashboardSidebar: () => void;

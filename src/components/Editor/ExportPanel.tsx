@@ -2,10 +2,11 @@
 
 import React, { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { FaDownload, FaCopy, FaLock, FaLockOpen, FaShapes } from 'react-icons/fa6';
+import { FaDownload, FaCopy, FaLock, FaLockOpen, FaShapes, FaCropSimple } from 'react-icons/fa6';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useEditor, ExportShape } from './EditorContext';
+import { PickExportModal } from './PickExportModal';
 
 type Format = 'png' | 'jpeg' | 'webp';
 
@@ -23,6 +24,7 @@ const SHAPE_OPTIONS: { id: ExportShape; label: string; visual: React.ReactNode }
   { id: 'hexagon', label: 'Hex', visual: <span className="text-xl leading-none">⬡</span> },
   { id: 'pentagon', label: 'Penta', visual: <span className="text-xl leading-none">⬠</span> },
   { id: 'diamond', label: 'Diamond', visual: <div className="h-6 w-6 rotate-45 border-2 border-zinc-300" /> },
+  { id: 'polygon', label: 'Poly', visual: <span className="flex h-7 items-center text-lg leading-none font-black text-zinc-300">⬡</span> },
 ];
 
 export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
@@ -51,6 +53,8 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
   const [aspectLocked, setAspectLocked] = useState(true);
   const [transparent, setTransparent] = useState(false);
   const [shape, setShape] = useState<ExportShape>('none');
+  const [polySides, setPolySides] = useState(6);
+  const [pickOpen, setPickOpen] = useState(false);
 
   /* ---------- resolve the final output size ---------- */
   const usingCustom = customW != null || customH != null;
@@ -163,14 +167,16 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
       // JPEG has no alpha — never request transparency for it
       transparent: format === 'jpeg' ? false : transparent,
       shape,
+      shapeSides: shape === 'polygon' ? polySides : undefined,
       mode,
     });
     onClose();
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Export image" subtitle={`${outW} × ${outH} px${capped ? ' (capped to device limit)' : ''} · ${megapixels.toFixed(1)} MP`}>
-      <div className="space-y-5">
+    <>
+      <Modal open={open} onClose={onClose} title="Export image" subtitle={`${outW} × ${outH} px${capped ? ' (capped to device limit)' : ''} · ${megapixels.toFixed(1)} MP`}>
+        <div className="space-y-5">
         {/* Format */}
         <div>
           <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Format</p>
@@ -330,6 +336,19 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
           <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
             <FaShapes size={10} /> Pick export shape
           </p>
+          {/* Grab ANY region of the project at any resolution (up to 16K) */}
+          <button
+            onClick={() => setPickOpen(true)}
+            className="focus-ring mb-2 flex w-full items-center gap-3 rounded-xl border border-indigo-400/40 bg-indigo-500/10 px-3 py-3 text-left transition-all hover:bg-indigo-500/20 active:scale-[0.98]"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white">
+              <FaCropSimple size={14} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-xs font-bold text-indigo-200">Pick region &amp; shape</span>
+              <span className="block text-[10px] text-zinc-400">Drag a box anywhere on the canvas · any resolution up to 16K</span>
+            </span>
+          </button>
           <div className="grid grid-cols-5 gap-2">
             {SHAPE_OPTIONS.map((s) => (
               <button
@@ -350,7 +369,16 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
               </button>
             ))}
           </div>
-          {shape !== 'none' && (
+          {shape === 'polygon' && (
+            <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/40 p-2">
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Polygon sides</span>
+              <button onClick={() => setPolySides((s) => Math.max(3, s - 1))} className="focus-ring h-6 w-6 rounded-md border border-white/10 bg-zinc-800/70 text-xs font-bold text-zinc-200 active:scale-90">−</button>
+              <span className="w-6 text-center font-mono text-xs font-bold text-zinc-100">{polySides}</span>
+              <button onClick={() => setPolySides((s) => Math.min(20, s + 1))} className="focus-ring h-6 w-6 rounded-md border border-white/10 bg-zinc-800/70 text-xs font-bold text-zinc-200 active:scale-90">+</button>
+              <span className="ml-auto text-[10px] text-zinc-600">3–20</span>
+            </div>
+          )}
+          {shape !== 'none' && shape !== 'polygon' && (
             <p className="mt-1.5 text-[10px] text-zinc-500">
               {format === 'png' || format === 'webp'
                 ? 'Exports with transparency outside the shape.'
@@ -386,7 +414,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
         {/* Output preview */}
         <div className="rounded-xl border border-white/10 bg-zinc-800/30 px-3 py-2.5 font-mono text-[11px] text-zinc-400">
           {outW} × {outH} px · {format === 'png' ? 'PNG' : format === 'jpeg' ? `JPG ${Math.round(quality * 100)}%` : `WebP ${Math.round(quality * 100)}%`}
-          {shape !== 'none' && ` · ${shape} shape`}
+          {shape !== 'none' && ` · ${shape === 'polygon' ? `${polySides}-gon` : shape} shape`}
           {capped && ' · capped'}
         </div>
 
@@ -408,6 +436,11 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
           </button>
         </div>
       </div>
-    </Modal>
+      </Modal>
+      {/* Full-screen picker must NOT live inside the Modal — the glass/transform
+          panel becomes the containing block for its fixed overlay (it would size
+          to the panel, not the viewport) and the outer backdrop stays clickable. */}
+      <PickExportModal open={pickOpen} onClose={() => setPickOpen(false)} />
+    </>
   );
 };
