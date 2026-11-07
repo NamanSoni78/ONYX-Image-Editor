@@ -25,7 +25,9 @@ import {
   CropShapeSpec,
   BorderStackConfig,
   BorderRing,
+  ShadowFxConfig,
   MAX_BORDERS,
+  exportPixelCaps,
 } from './EditorContext';
 import { ToastProvider, useToast } from '@/components/ui/Toast';
 import { Sidebar } from '@/components/Layout/Sidebar';
@@ -84,11 +86,55 @@ const OBJECT_TABS: MenuTab[] = ['ADJUST', 'FILTER', 'TEXT', 'STYLE', 'ARRANGE', 
 /** Custom props persisted through history / save / reload */
 const CANVAS_EXTRA_PROPS = [
   'selectable', 'name', 'id', 'filters', 'shadow', 'lockMovementX', 'lockMovementY', 'evented', 'visible',
-  'onyxBgCss', 'onyxBgTransparent', 'onyxBgImage', 'onyxRing', 'onyxRingCfg', 'onyxRingPart', 'strokeUniform',
+  'onyxBgCss', 'onyxBgTransparent', 'onyxBgImage', 'onyxRing', 'onyxRingCfg', 'onyxRingPart', 'onyxShadowPart', 'onyxShadowCfg', 'strokeUniform',
   'lockRotation', 'lockScalingX', 'lockScalingY', 'hasControls', 'onyxCropShape', 'onyxUid',
+  'onyxFilterMeta',
 ];
 
 const canvasToJson = (c: fabric.Canvas) => JSON.stringify(c.toJSON(CANVAS_EXTRA_PROPS as any));
+
+/** Filter provenance slots ('preset:Name' | 'adjust:key' | 'removeColor' | ''),
+ *  serialized 1:1 with the filters array. Live flags on filter INSTANCES do
+ *  not round-trip (fabric's BaseFilter.toObject drops unknown props), so after
+ *  any undo/redo or project reload the engine could no longer tell a preset
+ *  from an adjustment — presets stacked, RemoveColor duplicated. The meta
+ *  object lives on the IMAGE (which DOES round-trip via CANVAS_EXTRA_PROPS). */
+const syncFilterMeta = (img: fabric.Image) => {
+  (img as any).onyxFilterMeta = {
+    slots: (img.filters || []).map((f: any) =>
+      f?.onyxPreset
+        ? `preset:${f.onyxPreset}`
+        : f?.onyxRemove
+          ? 'removeColor'
+          : f?.onyxAdjust
+            ? `adjust:${f.onyxAdjust}`
+            : ''
+    ),
+  };
+};
+
+/** Rebuild the live filter flags from serialized meta (after undo/redo, project
+ *  load or a clone). Slots are position-parallel to the filters array, which
+ *  fabric restores in order. */
+const retagFiltersFromMeta = (img: fabric.Image) => {
+  const slots: string[] = (img as any).onyxFilterMeta?.slots || [];
+  (img.filters || []).forEach((f: any, i: number) => {
+    if (!f) return;
+    const s = slots[i] || '';
+    if (s.startsWith('preset:')) f.onyxPreset = s.slice(7);
+    else if (s.startsWith('adjust:')) f.onyxAdjust = s.slice(7);
+    else if (s === 'removeColor') f.onyxRemove = true;
+  });
+};
+
+/** Re-tag provenance flags on every image in a cloned tree (a clone copies the
+ *  serialized meta, but the new filter instances start unflagged). */
+const retagObjectTree = (o: any) => {
+  if (!o) return;
+  if (o.type === 'image') retagFiltersFromMeta(o as fabric.Image);
+  const kids = o.getObjects?.();
+  if (Array.isArray(kids)) kids.forEach(retagObjectTree);
+};
 
 /** Parse a CSS gradient string → { colors, radial, angleDeg } (supports N stops).
  *  angleDeg is in screen space: 0° = →, +90° = ↓ (matches gradientCoords). */
@@ -137,6 +183,240 @@ const mixHex = (a: string, b: string, t: number): string => {
   const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
   const p = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
   return `#${p.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+};
+
+/** Linear canvas gradient between two colors across a w×h box (screen-space angle). */
+const makeCtxGradient = (
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  g: { a: string; b: string; angle: number }
+): CanvasGradient => {
+  const rad = ((g.angle || 0) * Math.PI) / 180;
+  const len = (Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad))) / 2 || 1;
+  const dx = Math.cos(rad) * len;
+  const dy = Math.sin(rad) * len;
+  const grad = ctx.createLinearGradient(w / 2 - dx, h / 2 - dy, w / 2 + dx, h / 2 + dy);
+  grad.addColorStop(0, g.a);
+  grad.addColorStop(1, g.b);
+  return grad;
+};
+
+/* ------------------------------------------------------------------ */
+/* WebGL-safe image filtering                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * fabric's WebGL filter backend textures the FULL original element. Anything
+ * larger than the GPU's MAX_TEXTURE_SIZE (4096 on many phones, 8192 mid-range)
+ * silently renders blank or half-clipped — the "image turns invisible when I
+ * touch brightness" bug. We detect the cap once and pre-downscale oversized
+ * sources (visual size preserved) before the first applyFilters.
+ */
+let gpuTexCapCache = 0;
+const gpuTexCap = (): number => {
+  if (gpuTexCapCache > 0) return gpuTexCapCache;
+  if (typeof document !== 'undefined') {
+    try {
+      const gl = document.createElement('canvas').getContext('webgl');
+      if (gl) {
+        const v = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+        if (v >= 1024) gpuTexCapCache = v;
+      }
+    } catch {
+      /* probe failed — fall back to a conservative cap */
+    }
+  }
+  if (!gpuTexCapCache) gpuTexCapCache = 4096;
+  return gpuTexCapCache;
+};
+
+let glLossBound = false;
+/** WebGL contexts die silently under memory pressure (16K exports!) — from
+ *  then on every applyFilters renders blank. Swap to the CPU backend forever. */
+const fallBackTo2DFilters = () => {
+  try {
+    (fabric as any).enableGLFiltering = false;
+    if ((fabric as any).Canvas2dFilterBackend) {
+      (fabric as any).filterBackend = new (fabric as any).Canvas2dFilterBackend();
+    }
+  } catch {
+    /* ignore */
+  }
+};
+const bindContextLossGuard = () => {
+  if (glLossBound) return;
+  glLossBound = true;
+  try {
+    const fb: any = (fabric as any).filterBackend;
+    fb?.canvas?.addEventListener?.('webglcontextlost', (ev: Event) => {
+      ev.preventDefault?.();
+      fallBackTo2DFilters();
+    });
+  } catch {
+    /* ignore */
+  }
+};
+
+/** Downscale an image's source once so filtering never exceeds the GPU texture
+ *  cap. Visual size is preserved (width × scaleX stays constant). */
+const ensureFilterSafeSource = (img: fabric.Image): boolean => {
+  const cap = Math.min(gpuTexCap(), 8192);
+  const el: any = (img as any)._originalElement;
+  if (!el) return false;
+  const w = el.naturalWidth || el.width || 0;
+  const h = el.naturalHeight || el.height || 0;
+  if (!w || !h || Math.max(w, h) <= cap) return false;
+  const f = cap / Math.max(w, h);
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w * f));
+  cv.height = Math.max(1, Math.round(h * f));
+  const ctx = cv.getContext('2d');
+  if (!ctx) return false;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(el, 0, 0, cv.width, cv.height);
+  const oldW = (img as any).width || w;
+  const oldH = (img as any).height || h;
+  try {
+    (img as any).removeTexture?.((img as any).cacheKey);
+    (img as any).removeTexture?.((img as any).cacheKey + '_filtered');
+  } catch {
+    /* ignore */
+  }
+  (img as any)._originalElement = cv;
+  (img as any)._element = cv;
+  (img as any)._filteredEl = null;
+  if ((img as any).cropX) (img as any).cropX *= f;
+  if ((img as any).cropY) (img as any).cropY *= f;
+  img.set({
+    width: cv.width,
+    height: cv.height,
+    scaleX: ((img.scaleX || 1) * oldW) / cv.width,
+    scaleY: ((img.scaleY || 1) * oldH) / cv.height,
+  } as any);
+  img.set('dirty', true);
+  // A canvas source serializes as a giant PNG dataURL inside EVERY history /
+  // autosave snapshot (50 entries × tens of MB → tab OOM). Re-encode opaque
+  // sources as JPEG in the background and swap _originalElement to the decoded
+  // Image — fabric's getSrc() then returns the compact string instead.
+  try {
+    const probe = document.createElement('canvas');
+    const k = Math.min(1, 64 / Math.max(cv.width, cv.height));
+    probe.width = Math.max(1, Math.round(cv.width * k));
+    probe.height = Math.max(1, Math.round(cv.height * k));
+    const pctx = probe.getContext('2d');
+    let hasAlpha = true;
+    if (pctx) {
+      pctx.drawImage(cv, 0, 0, probe.width, probe.height);
+      const d = pctx.getImageData(0, 0, probe.width, probe.height).data;
+      hasAlpha = false;
+      for (let i = 3; i < d.length; i += 4) {
+        if (d[i] < 250) {
+          hasAlpha = true;
+          break;
+        }
+      }
+    }
+    if (!hasAlpha) {
+      cv.toBlob(
+        (blob) => {
+          if (!blob) return;
+          const fr = new FileReader();
+          fr.onload = () => {
+            const im = new Image();
+            im.onload = () => {
+              // swap only if this canvas is still the live source
+              if ((img as any)._originalElement === cv && (img as any).canvas) {
+                try {
+                  (img as any).removeTexture?.((img as any).cacheKey);
+                  (img as any).removeTexture?.((img as any).cacheKey + '_filtered');
+                } catch {
+                  /* ignore */
+                }
+                (img as any)._originalElement = im;
+                // Preserve fabric's invariant `_element === _originalElement`
+                // when no filtered element is live. If the filters were reset
+                // to empty WHILE this JPEG encode was in flight, fabric's
+                // applyFilters() already did `_element = _originalElement
+                // (cv); _filteredEl = null` — leaving _element at the old
+                // canvas here breaks the invariant, and the NEXT filter
+                // application takes the else-branch (`_element =
+                // _filteredEl` → null.getContext throws) leaving the image
+                // permanently invisible.
+                if (!(img as any)._filteredEl) {
+                  (img as any)._element = im;
+                }
+                img.set('dirty', true);
+                (img as any).canvas.requestRenderAll();
+              }
+            };
+            im.src = String(fr.result);
+          };
+          fr.readAsDataURL(blob);
+        },
+        'image/jpeg',
+        0.92
+      );
+    }
+  } catch {
+    /* keep the canvas source */
+  }
+  return true;
+};
+
+/** applyFilters that can never blank the image: the source is pre-scaled to the
+ *  GPU texture cap and a lost WebGL context triggers a CPU-backend retry. */
+const applyFiltersSafe = (img: fabric.Image) => {
+  try {
+    if (!(fabric as any).filterBackend) {
+      (fabric as any).filterBackend = (fabric as any).initFilterBackend();
+    }
+    bindContextLossGuard();
+  } catch {
+    /* ignore */
+  }
+  try {
+    ensureFilterSafeSource(img);
+  } catch {
+    /* ignore */
+  }
+  try {
+    img.applyFilters();
+  } catch {
+    fallBackTo2DFilters();
+    try {
+      img.applyFilters();
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const gl = (fabric as any).filterBackend?.gl;
+    if (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()) {
+      fallBackTo2DFilters();
+      img.applyFilters();
+    }
+  } catch {
+    /* ignore */
+  }
+};
+
+/** Snapshot an image's UNFILTERED pixels for the crop modal. `toDataURL`
+ *  renders through `_element` (the FILTERED copy), and `handleCrop`'s
+ *  `setSrc` re-applies `img.filters` via setElement — snapshotting the
+ *  filtered pixels would bake every adjustment/preset into the source and
+ *  then apply it a SECOND time (brightness +30 becomes +60, permanently,
+ *  committed to history). Temporarily neutralize the filters so the crop
+ *  base is raw; setSrc re-applies the look exactly once. */
+const unfilteredSnapshot = (img: fabric.Image): string => {
+  const stashed = img.filters;
+  img.filters = [];
+  applyFiltersSafe(img); // → _element = _originalElement (raw pixels)
+  const url = img.toDataURL({});
+  img.filters = stashed;
+  applyFiltersSafe(img); // re-establish the filtered look (same JS task — no flash)
+  return url;
 };
 
 /** Regular polygon points (sides ≥ 3), centered on (0,0) */
@@ -367,7 +647,17 @@ const ringPathFor = (target: fabric.Object): ((w: number, h: number) => Path2D) 
       return p;
     };
   }
-  // 2) native shape-following rings
+  // 2) reversible MASK (clipPath): the border covers the object's FULL frame —
+  //    the masked-away "pseudo area" stays INSIDE the border (square→circle mask
+  //    keeps its square border). Shape-following borders need the real Crop.
+  if (t.clipPath) {
+    return (w, h) => {
+      const p = new Path2D();
+      p.rect(0, 0, w, h);
+      return p;
+    };
+  }
+  // 3) native shape-following rings
   if (t.type === 'circle') return ellipse;
   if (t.type === 'triangle')
     return (w, h) => {
@@ -408,7 +698,7 @@ const ringPathFor = (target: fabric.Object): ((w: number, h: number) => Path2D) 
         return p;
       };
   }
-  // 3) default: rectangle rings (images, text, groups, paths)
+  // 4) default: rectangle rings (images, text, groups, paths)
   return (w, h) => {
     const p = new Path2D();
     p.rect(0, 0, w, h);
@@ -416,9 +706,47 @@ const ringPathFor = (target: fabric.Object): ((w: number, h: number) => Path2D) 
   };
 };
 
+/** Safe image loader. fabric's fromURL builds `new fabric.Image(null)` when
+ *  the decode fails, which throws INSIDE its own error handler (addClass on a
+ *  null element) BEFORE any caller callback runs — a promise wrapping it would
+ *  never settle and the busy-flags (rasterBusy/borderBusy) would wedge undo,
+ *  redo and every adjustment for the whole session. Route through
+ *  util.loadImage, check the error flag, keep a hard timeout as safety net. */
+const loadImageP = (url: string, timeoutMs = 20000): Promise<fabric.Image | null> =>
+  new Promise((res) => {
+    let settled = false;
+    const done = (v: fabric.Image | null) => {
+      if (settled) return;
+      settled = true;
+      res(v);
+    };
+    try {
+      (fabric.util as any).loadImage(
+        url,
+        (el: any, isError: boolean) => {
+          if (!el || isError) {
+            done(null);
+            return;
+          }
+          try {
+            done(new fabric.Image(el, {}));
+          } catch {
+            done(null);
+          }
+        },
+        null,
+        undefined
+      );
+    } catch {
+      done(null);
+    }
+    setTimeout(() => done(null), timeoutMs);
+  });
+
 /** Render any object axis-aligned (rotation baked in) into an offscreen canvas. */
 const rasterizeToCanvas = (
-  obj: fabric.Object
+  obj: fabric.Object,
+  ignoreShadow = false
 ): Promise<{ canvas: HTMLCanvasElement; bound: { left: number; top: number; width: number; height: number }; m: number } | null> =>
   new Promise((resolve) => {
     try {
@@ -428,7 +756,7 @@ const rasterizeToCanvas = (
       // getBoundingRect ignores shadows — pad so glows survive the raster
       const sh: any = (obj as any).shadow;
       const pad =
-        sh && typeof sh !== 'string'
+        !ignoreShadow && sh && typeof sh !== 'string'
           ? (sh.blur || 0) + Math.max(Math.abs(sh.offsetX || 0), Math.abs(sh.offsetY || 0))
           : 0;
       const bound =
@@ -452,6 +780,7 @@ const rasterizeToCanvas = (
             return;
           }
           cl.set({ left: (obj.left || 0) - bound.left, top: (obj.top || 0) - bound.top, selectable: false, evented: false });
+          if (ignoreShadow) cl.set({ shadow: null });
           tmp.setZoom(m);
           tmp.add(cl);
           tmp.renderAll();
@@ -464,6 +793,9 @@ const rasterizeToCanvas = (
         },
         CANVAS_EXTRA_PROPS as any
       );
+      // Safety net: a clone whose nested image fails to decode never calls
+      // its callback — resolve null so the caller's busy-flags always clear.
+      setTimeout(() => resolve(null), 15000);
     } catch {
       resolve(null);
     }
@@ -472,7 +804,11 @@ const rasterizeToCanvas = (
 /** Rasterize an object (optionally shape-cropped to its tight box) into a new fabric.Image.
  *  Rotation is baked in, opacity/shadow are baked in; lock state + name carry over. */
 const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null): Promise<fabric.Image | null> =>
-  rasterizeToCanvas(obj).then(
+  // Shape crops trace the shape over the object's OWN bbox — rasterizing with
+  // the shadow padding would inscribe the crop in bbox+blur+offset (a "circle
+  // crop" of a shadowed rect came out oversized on all sides and baked the
+  // shadow into the crop geometry / contour borders).
+  rasterizeToCanvas(obj, !!spec).then(
     (r) =>
       new Promise<fabric.Image | null>((resolve) => {
         if (!r) {
@@ -497,7 +833,11 @@ const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null):
           box = t.box;
         }
         const url = out.toDataURL('image/png');
-        fabric.Image.fromURL(url, (img) => {
+        loadImageP(url).then((img) => {
+          if (!img) {
+            resolve(null);
+            return;
+          }
           const src: any = obj;
           img.set({
             originX: 'left',
@@ -515,11 +855,211 @@ const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null):
             lockScalingY: !!src.lockScalingY,
             hasControls: src.hasControls !== false,
           } as any);
+          // A shape-cropped object keeps its basic shadow — re-attached to the
+          // new image so it wraps the CROPPED contour (instead of being baked
+          // into an oversized padded raster).
+          if (spec && src.shadow && typeof src.shadow !== 'string') {
+            try {
+              (img as any).set({
+                shadow: new fabric.Shadow((src.shadow as fabric.Shadow).toObject()),
+              });
+            } catch {
+              /* keep shadowless */
+            }
+          }
           (img as any).onyxCropShape = spec ? { shape: spec.shape, sides: spec.sides } : src.onyxCropShape || undefined;
           resolve(img);
         });
       })
   );
+
+
+  const computeRings = (cfg: BorderStackConfig): BorderRing[] => {
+    const n = clamp(Math.round(cfg.count), 1, MAX_BORDERS);
+    if (cfg.mode === 'custom') {
+      // custom mode: per-border values, padded with the panel's shown defaults
+      // (white 6px) when the rings array is shorter than the count — the
+      // gradient-ramp fallback would silently render the wrong thing
+      const out: BorderRing[] = [];
+      for (let i = 0; i < n; i++) {
+        const r = cfg.rings?.[i] || { width: 6, color: '#ffffff' };
+        out.push({
+          width: clamp(r.width, 1, 60),
+          color: r.color,
+          gradient: r.gradient ? { a: r.gradient.a, b: r.gradient.b, angle: r.gradient.angle || 0 } : undefined,
+        });
+      }
+      return out;
+    }
+    const rings: BorderRing[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0 : i / (n - 1);
+      rings.push({
+        width: cfg.widthMin + (cfg.widthMax - cfg.widthMin) * t,
+        color: mixHex(cfg.colorA, cfg.colorB, t),
+      });
+    }
+    return rings;
+  };
+
+  /** Render ALL rings of a stack into ONE offscreen canvas (that is what makes
+   *  up to 1024 borders viable — one image layer, not 1024 fabric objects).
+   *  Each ring may use a solid color or its own two-color gradient. */
+  const buildRingCanvas = (
+    target: fabric.Object,
+    cfg: BorderStackConfig
+  ): { canvas: HTMLCanvasElement; m: number } | null => {
+    const rings = computeRings(cfg);
+    if (!rings.length) return null;
+    const bw = target.getScaledWidth();
+    const bh = target.getScaledHeight();
+    if (bw < 4 || bh < 4) return null;
+
+    // Ring geometry: center offset of each ring from the object edge
+    let acc = 0;
+    const layout = rings.map((r) => {
+      acc += r.width / 2;
+      const centerOff = acc;
+      acc += cfg.gap;
+      return { ...r, centerOff };
+    });
+    const outer = Math.max(1, ...layout.map((l) => l.centerOff + l.width / 2));
+
+    // Hard cap 4096px/side — iOS Safari fails above ~16MP canvases.
+    const fullW = bw + 2 * outer;
+    const fullH = bh + 2 * outer;
+    const CAP = 4096;
+    const m = clamp(Math.min(3, CAP / Math.max(fullW, fullH)), 0.02, 3);
+    const rc = document.createElement('canvas');
+    // +3px guard: the +1.5 path-box fudge plus the stroke's outer half can poke
+    // past the exact box and shave the outermost ring.
+    rc.width = Math.max(2, Math.ceil(fullW * m) + 3);
+    rc.height = Math.max(2, Math.ceil(fullH * m) + 3);
+    const rctx = rc.getContext('2d');
+    if (!rctx) return null;
+    rctx.lineJoin = 'round';
+    rctx.lineCap = 'round';
+    const trace = ringPathFor(target);
+    // Draw outermost first — inner rings overlap the seam, hiding hairline gaps
+    for (let i = layout.length - 1; i >= 0; i--) {
+      const l = layout[i];
+      const rw = (bw + 2 * l.centerOff) * m + 1.5;
+      const rh = (bh + 2 * l.centerOff) * m + 1.5;
+      rctx.save();
+      // paths are built in 0..rw × 0..rh space — center that box on the canvas
+      rctx.translate((rc.width - rw) / 2, (rc.height - rh) / 2);
+      // Floor the ring WIDTH in object space (0.5px), then scale — an absolute
+      // canvas-space floor fattened 1px rings tenfold at low supersample
+      // (exactly the 1024-ring regime where the cap forces m≪1).
+      rctx.lineWidth = Math.max(0.5, l.width) * m;
+      rctx.strokeStyle = l.gradient ? makeCtxGradient(rctx, rw, rh, l.gradient) : l.color;
+      rctx.stroke(trace(rw, rh));
+      rctx.restore();
+    }
+    return { canvas: rc, m };
+  };
+
+  /** Build the advanced-shadow raster: the object's own silhouette, recolored
+   *  (solid or gradient), blurred, spread and offset by direction+distance. */
+  const buildShadowCanvas = async (
+    target: fabric.Object,
+    cfg: ShadowFxConfig
+  ): Promise<{ canvas: HTMLCanvasElement; m: number } | null> => {
+    // 1. silhouette raster — the object's alpha shape (basic shadow stripped)
+    const r = await rasterizeToCanvas(target, true);
+    if (!r) return null;
+    const { canvas: src, bound } = r;
+    const bw = Math.max(1, bound.width);
+    const bh = Math.max(1, bound.height);
+
+    // 2. recolor the silhouette: draw it, then flood with color/gradient
+    //    through source-in so only the shape's alpha survives
+    const rec = document.createElement('canvas');
+    rec.width = src.width;
+    rec.height = src.height;
+    const rctx = rec.getContext('2d');
+    if (!rctx) return null;
+    rctx.drawImage(src, 0, 0);
+    rctx.globalCompositeOperation = 'source-in';
+    rctx.fillStyle =
+      cfg.mode === 'gradient'
+        ? makeCtxGradient(rctx, rec.width, rec.height, { a: cfg.gradA, b: cfg.gradB, angle: cfg.gradAngle })
+        : cfg.color;
+    rctx.fillRect(0, 0, rec.width, rec.height);
+
+    // 3. blurred + spread + offset shadow canvas, symmetric around the object
+    const spread = Math.max(0, cfg.spread || 0);
+    const blur = Math.max(0, cfg.blur || 0);
+    const rad = ((cfg.angle || 0) * Math.PI) / 180;
+    const dx = Math.cos(rad) * (cfg.distance || 0);
+    const dy = Math.sin(rad) * (cfg.distance || 0);
+    // 3σ blur bleed margin — 2σ hard-clipped the gaussian tail at the raster
+    // edge (a faint straight cutoff, worst opposite the offset direction).
+    const pad = blur * 3 + 2;
+    const fullW = bw + 2 * spread + 2 * pad + 2 * Math.abs(dx);
+    const fullH = bh + 2 * spread + 2 * pad + 2 * Math.abs(dy);
+    const m = clamp(Math.min(2, 4096 / Math.max(fullW, fullH)), 0.02, 2);
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(2, Math.ceil(fullW * m));
+    cv.height = Math.max(2, Math.ceil(fullH * m));
+    const ctx = cv.getContext('2d');
+    if (!ctx) return null;
+
+    // 3a. SOLID silhouette at natural size, then ISOTROPIC spread dilation by
+    //     stamping it around a circle of radius = spread. The old code stretched
+    //     the raster to (bw+2s)×(bh+2s) — an anisotropic scale on non-square
+    //     bounds that turned a 360° glow into an egg.
+    const solid = document.createElement('canvas');
+    solid.width = cv.width;
+    solid.height = cv.height;
+    const sctx = solid.getContext('2d');
+    if (!sctx) return null;
+    const silW = bw * m;
+    const silH = bh * m;
+    sctx.drawImage(rec, cv.width / 2 - silW / 2, cv.height / 2 - silH / 2, silW, silH);
+    const spreadPx = spread * m;
+    if (spreadPx > 1) {
+      const n = Math.max(12, Math.ceil(Math.PI * spreadPx)); // ~2px stamp spacing
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        sctx.drawImage(
+          rec,
+          cv.width / 2 - silW / 2 + Math.cos(a) * spreadPx,
+          cv.height / 2 - silH / 2 + Math.sin(a) * spreadPx,
+          silW,
+          silH
+        );
+      }
+    }
+
+    // 3b. blur + offset + opacity composite
+    ctx.globalAlpha = clamp(cfg.opacity == null ? 0.55 : cfg.opacity, 0.05, 1);
+    const cx = cv.width / 2 + dx * m;
+    const cy = cv.height / 2 + dy * m;
+    const blurPx = blur * m;
+    const canFilter = typeof (ctx as any).filter === 'string';
+    if (blurPx > 0.5 && canFilter) {
+      (ctx as any).filter = `blur(${blurPx}px)`;
+      ctx.drawImage(solid, cx - solid.width / 2, cy - solid.height / 2);
+      (ctx as any).filter = 'none';
+    } else if (blurPx > 0.5) {
+      // Old-Safari fallback: layered jittered draws approximate a gaussian
+      const N = 9;
+      ctx.globalAlpha = clamp(cfg.opacity == null ? 0.55 : cfg.opacity, 0.05, 1) * 0.6;
+      ctx.drawImage(solid, cx - solid.width / 2, cy - solid.height / 2);
+      ctx.globalAlpha = clamp(cfg.opacity == null ? 0.55 : cfg.opacity, 0.05, 1) * 0.12;
+      for (let i = 0; i < N; i++) {
+        const a = (i / N) * Math.PI * 2;
+        const rr = (blurPx / 2) * Math.sqrt((i + 0.5) / N);
+        ctx.drawImage(solid, cx - solid.width / 2 + Math.cos(a) * rr, cy - solid.height / 2 + Math.sin(a) * rr);
+      }
+    } else {
+      ctx.drawImage(solid, cx - solid.width / 2, cy - solid.height / 2);
+    }
+    return { canvas: cv, m };
+  };
+
+/* ---------------- attachment builders (borders + advanced shadow) ---------------- */
 
 let checkerCache: fabric.Pattern | null = null;
 const getCheckerPattern = (): fabric.Pattern => {
@@ -570,6 +1110,86 @@ const docBgFromFrame = (frame: fabric.Rect | null | undefined): DocBg => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Export render engine                                                */
+/* ------------------------------------------------------------------ */
+
+/** Flicker-free region capture. NEVER resizes the live DOM canvas — the old
+ *  code (setDimensions + VPT reset) repainted the editor twice per capture,
+ *  which read as a black flash on 16K exports. Instead the crop is computed
+ *  in viewport space so the visible canvas is completely untouched. */
+const captureRegion = (
+  c: fabric.Canvas,
+  left: number,
+  top: number,
+  width: number,
+  height: number, // doc-space px
+  scale: number
+): HTMLCanvasElement => {
+  const z = c.getZoom() || 1;
+  const vp = c.viewportTransform as number[];
+  const cropLeft = left * z + (vp[4] || 0);
+  const cropTop = top * z + (vp[5] || 0);
+  const cropW = Math.max(1, width * z);
+  const cropH = Math.max(1, height * z);
+  return c.toCanvasElement(scale / z, { left: cropLeft, top: cropTop, width: cropW, height: cropH });
+};
+
+/** Resolve the exact output pixel size (aspect-locked unless both given) + caps */
+const resolveExportSize = (
+  opts: { scale?: number; targetWidth?: number; targetHeight?: number },
+  baseW: number,
+  baseH: number
+): { outW: number; outH: number } => {
+  let outW: number;
+  let outH: number;
+  if (opts.targetWidth && opts.targetHeight) {
+    outW = Math.max(1, Math.round(opts.targetWidth));
+    outH = Math.max(1, Math.round(opts.targetHeight));
+  } else if (opts.targetWidth) {
+    outW = Math.max(1, Math.round(opts.targetWidth));
+    outH = Math.max(1, Math.round((outW * baseH) / baseW));
+  } else {
+    const s = opts.scale || 1;
+    outW = Math.max(1, Math.round(baseW * s));
+    outH = Math.max(1, Math.round(baseH * s));
+  }
+  // Browser/device safety caps (16 384 px/side, ≤ area limit — iOS is 16.7 MP)
+  const { maxSide, maxMP } = exportPixelCaps();
+  const sideCap = Math.min(1, maxSide / Math.max(outW, outH));
+  const mpCap = Math.min(1, Math.sqrt(maxMP / (outW * outH)));
+  const cap = Math.min(sideCap, mpCap);
+  return { outW: Math.max(1, Math.floor(outW * cap)), outH: Math.max(1, Math.floor(outH * cap)) };
+};
+
+const toBlobP = (canvas: HTMLCanvasElement, type: string, q: number): Promise<Blob | null> =>
+  new Promise((res) => {
+    try {
+      canvas.toBlob((b) => res(b), type, q);
+    } catch {
+      res(null);
+    }
+  });
+
+/** Cheap blank-detector: downscale to 32×32 and look for ANY non-transparent
+ *  pixel. Catches the "canvas bigger than the device can hold → black/empty
+ *  4 MB export" failure mode without allocating anything big. */
+const canvasIsBlank = (canvas: HTMLCanvasElement): boolean => {
+  try {
+    const t = document.createElement('canvas');
+    t.width = 32;
+    t.height = 32;
+    const ctx = t.getContext('2d');
+    if (!ctx) return false;
+    ctx.drawImage(canvas, 0, 0, 32, 32);
+    const d = ctx.getImageData(0, 0, 32, 32).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return false;
+    return true;
+  } catch {
+    return true; // broken canvas → treat as blank so the caller retries smaller
+  }
+};
+
+/* ------------------------------------------------------------------ */
 /* Component                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -616,12 +1236,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const panStateRef = useRef<{ panning: boolean; x: number; y: number }>({ panning: false, x: 0, y: 0 });
   const pinchRef = useRef({ active: false, startDist: 0, startMid: { x: 0, y: 0 }, startZoom: 1, startVT: [1, 0, 0, 1, 0, 0] });
   const clipboardRef = useRef<fabric.Object | null>(null);
-  const compareStashRef = useRef<fabric.IBaseFilter[] | null>(null);
+  const compareStashRef = useRef<{ obj: fabric.Image; filters: fabric.IBaseFilter[] } | null>(null);
   const activeObjRef = useRef<fabric.Object | null>(null);
   const projectNameRef = useRef('Untitled Project');
   const brushStateRef = useRef({ size: 5, color: '#ef4444' });
   /** true while export/thumbnail capture runs — selection events are suppressed */
   const isCapturingRef = useRef(false);
+  // ONE export at a time, app-wide (see exportImage — per-panel guards can't
+  // cover the cross-panel Escape path)
+  const exportBusyRef = useRef(false);
   /** set after debouncedSave is created; lets earlier closures schedule saves */
   const scheduleSaveRef = useRef<() => void>(() => {});
 
@@ -646,6 +1269,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  /** Full-viewport "Rendering…" overlay while a (possibly huge) export runs */
+  const [exportBusy, setExportBusy] = useState<string | null>(null);
 
   /* ---------- tiny wrappers ---------- */
   const setMenu = useCallback((m: MenuTab) => setMenuState(m), []);
@@ -718,7 +1343,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const updateLayersNow = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return;
-    const objs = c.getObjects().filter((o) => (o as any).name !== FRAME_NAME);
+    const objs = c
+      .getObjects()
+      // frame + the transient MASK_EDIT scaffolding shape never show as layers
+      .filter((o) => (o as any).name !== FRAME_NAME && !(o as any).onyxTempMask);
     const infos: LayerInfo[] = objs.slice().reverse().map((obj) => {
       // stable ids survive reorders (fallback ids change on every reorder → row remounts)
       if (!(obj as any).onyxUid) (obj as any).onyxUid = `l${Math.random().toString(36).slice(2, 9)}`;
@@ -731,7 +1359,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         thumb = undefined;
       }
       return {
-        id: (obj as any).id || `${obj.type}-${c.getObjects().indexOf(obj)}`,
+        // onyxUid (generated above, persisted via CANVAS_EXTRA_PROPS): a stable
+        // key that survives reorders — the old index-based fallback remounted
+        // every row (thumbnail churn, lost rename state, drag desync).
+        id: (obj as any).onyxUid as string,
         name: (obj as any).name || TYPE_LABEL[obj.type || ''] || obj.type || 'Layer',
         type: obj.type || 'object',
         thumb,
@@ -756,16 +1387,37 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const saveHistory = useCallback(() => {
     const c = canvasRef.current;
     if (!c || isLockedRef.current) return;
+    // An adjust-rasterize is mid-flight: the canvas still shows the
+    // PRE-adjustment vector state — a push here bakes a duplicate entry and the
+    // post-rasterize commit never lands (undo/redo silently no-op).
+    if (rasterBusyRef.current) return;
+    // Hold-compare has the live filters stripped — a concurrent commit (arrow
+    // keys, Ctrl+D, throttled save) must not bake the unfiltered state in.
+    if (compareStashRef.current) return;
     const entry = {
       json: canvasToJson(c),
       w: docSizeRef.current.width,
       h: docSizeRef.current.height,
     };
+    // A no-op commit (pointer-up without a change, double-click reset on an
+    // already-default slider) pushes a JSON-identical entry — the next undo
+    // would then be a silent no-op. Collapse it.
+    const top = historyRef.current[historyStepRef.current];
+    if (top && top.json === entry.json && top.w === entry.w && top.h === entry.h) return;
     if (historyStepRef.current < historyRef.current.length - 1) {
       historyRef.current = historyRef.current.slice(0, historyStepRef.current + 1);
     }
     historyRef.current.push(entry);
     if (historyRef.current.length > 50) {
+      historyRef.current.shift();
+    }
+    // Ring/shadow part canvases embed as multi-MB base64 in every entry — cap
+    // the RETAINED bytes so a few maxed-out stacks can't pin ~100MB+ of strings
+    // (low-RAM devices). Evict oldest beyond the budget, never below 2 entries.
+    let total = 0;
+    for (const e of historyRef.current) total += e.json.length;
+    while (total > 32 * 1024 * 1024 && historyRef.current.length > 2) {
+      total -= historyRef.current[0].json.length;
       historyRef.current.shift();
     }
     historyStepRef.current = historyRef.current.length - 1;
@@ -815,6 +1467,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         frameRef.current = (c.getObjects().find((o) => (o as any).name === FRAME_NAME) as fabric.Rect) || frameRef.current;
         applyDocSize(entry.w, entry.h, { fit: false });
         setDocBgState(docBgFromFrame(frameRef.current));
+        // fabric's fromObject/setElement runs a RAW applyFilters for images with
+        // filters — sources over the GPU texture cap blank out (the v2.2
+        // brightness-invisibility bug surviving on the load path). Re-run the
+        // guarded pass over every filtered image — and restore the filter
+        // provenance flags from serialized meta FIRST (see syncFilterMeta).
+        c.getObjects().forEach((o) => {
+          if (o.type === 'image') {
+            retagFiltersFromMeta(o as fabric.Image);
+            if ((o as fabric.Image).filters?.length) applyFiltersSafe(o as fabric.Image);
+          }
+        });
         c.renderAll();
         updateLayersNow();
         isLockedRef.current = false;
@@ -825,6 +1488,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   );
 
   const undo = useCallback(() => {
+    // an async border/shadow/raster build is mid-flight: swapping the canvas
+    // underneath it would resurrect stale objects — wait it out
+    if (borderBusyRef.current || rasterBusyRef.current) return;
     if (historyStepRef.current > 0 && historyRef.current.length > 0) {
       historyStepRef.current--;
       restoreEntry(historyRef.current[historyStepRef.current]);
@@ -833,6 +1499,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   }, [restoreEntry]);
 
   const redo = useCallback(() => {
+    if (borderBusyRef.current || rasterBusyRef.current) return;
     if (historyStepRef.current < historyRef.current.length - 1) {
       historyStepRef.current++;
       restoreEntry(historyRef.current[historyStepRef.current]);
@@ -855,9 +1522,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     }): { url: string; w: number; h: number } => {
       const c = canvasRef.current;
       if (!c) return { url: '', w: 0, h: 0 };
-      const prevW = c.getWidth();
-      const prevH = c.getHeight();
-      const prevVT = [...(c.viewportTransform as number[])];
       const frame = frameRef.current;
       const prevFrameVisible = frame ? frame.visible : true;
       const prevFrameFill = frame ? frame.fill : undefined;
@@ -869,33 +1533,25 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const reg = opts.region;
       const baseW = reg ? reg.width : dw;
       const baseH = reg ? reg.height : dh;
-
-      // Resolve the exact output pixel size (aspect-locked unless both are given)
-      let outW: number;
-      let outH: number;
-      if (opts.targetWidth && opts.targetHeight) {
-        outW = Math.max(1, Math.round(opts.targetWidth));
-        outH = Math.max(1, Math.round(opts.targetHeight));
-      } else if (opts.targetWidth) {
-        outW = Math.max(1, Math.round(opts.targetWidth));
-        outH = Math.max(1, Math.round((outW * baseH) / baseW));
-      } else {
-        const s = opts.scale || 1;
-        outW = Math.max(1, Math.round(baseW * s));
-        outH = Math.max(1, Math.round(baseH * s));
-      }
-
-      // Browser safety caps: 16 384 px per side, ≤ 268 MP total
-      const MAX_SIDE = 16384;
-      const MAX_MP = 268435456;
-      const sideCap = Math.min(1, MAX_SIDE / Math.max(outW, outH));
-      const mpCap = Math.min(1, Math.sqrt(MAX_MP / (outW * outH)));
-      const cap = Math.min(sideCap, mpCap);
-      outW = Math.max(1, Math.floor(outW * cap));
-      outH = Math.max(1, Math.floor(outH * cap));
+      const { outW, outH } = resolveExportSize(opts, baseW, baseH);
 
       // Capture at (at least) output resolution so text/shapes stay crisp
-      const captureScale = clamp(Math.max(outW / baseW, outH / baseH), 0.02, 20);
+      // The INTERMEDIATE capture canvas must also stay inside the device caps —
+      // clamping only the OUTPUT let a ratio-flipping custom export (wide doc →
+      // tall target) request a 120 000px-wide capture canvas → guaranteed blank.
+      // drawImage already stretches to the output box, so this only trades
+      // sharpness on the short axis instead of failing the whole export.
+      const capsc = exportPixelCaps();
+      const captureScale = clamp(
+        Math.min(
+          Math.max(outW / baseW, outH / baseH),
+          capsc.maxSide / baseW,
+          capsc.maxSide / baseH,
+          Math.sqrt(capsc.maxMP / (baseW * baseH || 1))
+        ),
+        0.02,
+        20
+      );
 
       const isTransparentDoc =
         !!(frame as any)?.onyxBgTransparent || frame?.fill instanceof fabric.Pattern;
@@ -919,14 +1575,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
 
         c.discardActiveObject();
-        c.setDimensions({ width: dw, height: dh });
-        c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-        const captured = c.toCanvasElement(captureScale, {
-          left: reg ? reg.left : 0,
-          top: reg ? reg.top : 0,
-          width: baseW,
-          height: baseH,
-        });
+        const captured = captureRegion(c, reg ? reg.left : 0, reg ? reg.top : 0, baseW, baseH, captureScale);
 
         // Compose the final canvas: exact size, optional shape mask
         const out = document.createElement('canvas');
@@ -940,8 +1589,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
             ctx.fillRect(0, 0, outW, outH);
           }
           ctx.save();
-          const path = traceExportShape(ctx, opts.shape, outW, outH, opts.shapeSides);
-          ctx.clip(path);
+          ctx.clip(traceExportShape(ctx, opts.shape, outW, outH, opts.shapeSides));
           ctx.drawImage(captured, 0, 0, outW, outH);
           ctx.restore();
         } else {
@@ -949,8 +1597,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
         url = out.toDataURL(`image/${opts.format === 'jpeg' ? 'jpeg' : opts.format}`, opts.quality);
       } finally {
-        c.setDimensions({ width: prevW, height: prevH });
-        c.setViewportTransform(prevVT);
         c.backgroundColor = prevBgColor as any;
         if (frame) {
           frame.set('visible', prevFrameVisible);
@@ -961,6 +1607,144 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
       c.requestRenderAll();
       return { url, w: outW, h: outH };
+    },
+    []
+  );
+
+  /**
+   * Memory-safe async export renderer (the path every Download/Copy takes):
+   * - strip rendering — big exports render in ~4096-px-tall bands instead of one
+   *   giant intermediate canvas (halves peak memory),
+   * - toBlob instead of toDataURL (no 1.33× base64 string on top),
+   * - blank-output detection so the caller can retry smaller instead of
+   *   shipping a black 4 MB file.
+   */
+  const renderDocBlob = useCallback(
+    async (opts: {
+      format: 'png' | 'jpeg' | 'webp';
+      quality: number;
+      scale?: number;
+      targetWidth?: number;
+      targetHeight?: number;
+      transparent?: boolean;
+      shape?: ExportShape;
+      shapeSides?: number;
+      region?: { left: number; top: number; width: number; height: number };
+    }): Promise<{ blob: Blob; url: string; w: number; h: number } | null> => {
+      const c = canvasRef.current;
+      if (!c) return null;
+      const frame = frameRef.current;
+      const prevFrameVisible = frame ? frame.visible : true;
+      const prevFrameFill = frame ? frame.fill : undefined;
+      const prevBgColor = c.backgroundColor as string | fabric.Pattern | undefined;
+      const prevActive = c.getActiveObject();
+
+      const { width: dw, height: dh } = docSizeRef.current;
+      const reg = opts.region;
+      const baseW = reg ? reg.width : dw;
+      const baseH = reg ? reg.height : dh;
+      const { outW, outH } = resolveExportSize(opts, baseW, baseH);
+      // The INTERMEDIATE capture canvas must also stay inside the device caps —
+      // clamping only the OUTPUT let a ratio-flipping custom export (wide doc →
+      // tall target) request a 120 000px-wide capture canvas → guaranteed blank.
+      // drawImage already stretches to the output box, so this only trades
+      // sharpness on the short axis instead of failing the whole export.
+      const capsc = exportPixelCaps();
+      const captureScale = clamp(
+        Math.min(
+          Math.max(outW / baseW, outH / baseH),
+          capsc.maxSide / baseW,
+          capsc.maxSide / baseH,
+          Math.sqrt(capsc.maxMP / (baseW * baseH || 1))
+        ),
+        0.02,
+        20
+      );
+
+      const isTransparentDoc =
+        !!(frame as any)?.onyxBgTransparent || frame?.fill instanceof fabric.Pattern;
+      const wantTransparent = !!opts.transparent && opts.format !== 'jpeg';
+
+      const out = document.createElement('canvas');
+      out.width = outW;
+      out.height = outH;
+      const ctx = out.getContext('2d');
+      if (!ctx) return null;
+      if (opts.shape && opts.shape !== 'none' && opts.format === 'jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, outW, outH);
+      }
+
+      // Strips: big outputs render in horizontal bands so the transient canvas
+      // stays small; small outputs are a single band.
+      const stripDocH = outW * outH > 40e6 ? Math.max(256, Math.floor(4096 / captureScale)) : baseH;
+      const nStrips = Math.max(1, Math.ceil(baseH / stripDocH));
+      const yScale = outH / baseH;
+
+      isCapturingRef.current = true;
+      try {
+        if (frame) {
+          if (wantTransparent) {
+            frame.set('visible', false);
+            c.backgroundColor = '';
+          } else if (isTransparentDoc) {
+            frame.set('fill', '#ffffff');
+          }
+        }
+        c.discardActiveObject();
+
+        const clipShape = opts.shape && opts.shape !== 'none' ? opts.shape : null;
+        if (clipShape) {
+          ctx.save();
+          ctx.clip(traceExportShape(ctx, clipShape, outW, outH, opts.shapeSides));
+        }
+        // A device-failed oversized capture comes back fully TRANSPARENT —
+        // composited over the JPEG/shape white pre-fill that reads as uniform
+        // white and slips past the final alpha-only blank check. Track it per
+        // strip (a legit white image has OPAQUE pixels and never trips this).
+        let stripsBlank = 0;
+        for (let i = 0; i < nStrips; i++) {
+          const sTop = (reg ? reg.top : 0) + i * stripDocH;
+          const sH = Math.min(stripDocH, baseH - i * stripDocH);
+          const captured = captureRegion(c, reg ? reg.left : 0, sTop, baseW, sH, captureScale);
+          if (canvasIsBlank(captured)) stripsBlank++;
+          // Overlapping destinations by 1px hide rounding seams between strips
+          const destY = Math.round(i * stripDocH * yScale);
+          const destEnd = Math.round((i * stripDocH + sH) * yScale);
+          ctx.drawImage(captured, 0, destY, outW, destEnd - destY + (i < nStrips - 1 ? 1 : 0));
+          // Yield to the event loop between bands — keeps the tab responsive
+          if (nStrips > 1) await new Promise((r) => setTimeout(r, 0));
+        }
+        if (clipShape) ctx.restore();
+        // JPEG + shape is the one path where the white pre-fill can HIDE a
+        // total capture failure — if every strip came back empty on a big
+        // export, fail so the caller retries smaller instead of shipping a
+        // blank white JPEG.
+        if (
+          opts.shape &&
+          opts.shape !== 'none' &&
+          opts.format === 'jpeg' &&
+          stripsBlank === nStrips &&
+          outW * outH > 1e6
+        ) {
+          return null;
+        }
+      } finally {
+        c.backgroundColor = prevBgColor as any;
+        if (frame) {
+          frame.set('visible', prevFrameVisible);
+          frame.set('fill', prevFrameFill);
+        }
+        if (prevActive) c.setActiveObject(prevActive);
+        isCapturingRef.current = false;
+        c.requestRenderAll();
+      }
+
+      if (outW * outH > 1e6 && canvasIsBlank(out)) return null;
+      const mime = `image/${opts.format === 'jpeg' ? 'jpeg' : opts.format}`;
+      const blob = await toBlobP(out, mime, opts.quality);
+      if (!blob || (outW * outH > 4e6 && blob.size < 1024)) return null;
+      return { blob, url: URL.createObjectURL(blob), w: outW, h: outH };
     },
     []
   );
@@ -1004,6 +1788,19 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   /* ---------- selection sync ---------- */
   const syncFromObject = useCallback(
     (obj: fabric.Object | undefined) => {
+      // A live hold-compare stash must never outlive its context — if the
+      // selection moved off the held object (or cleared), restore the stashed
+      // filters NOW or the image stays unfiltered while the panel claims
+      // adjustments exist (and autosave would persist the stripped state).
+      const stash = compareStashRef.current;
+      if (stash && stash.obj !== obj) {
+        compareStashRef.current = null;
+        if (stash.obj.canvas) {
+          stash.obj.filters = stash.filters || [];
+          applyFiltersSafe(stash.obj);
+          stash.obj.canvas.requestRenderAll();
+        }
+      }
       if (!obj) {
         setActiveObj(null);
         activeObjRef.current = null;
@@ -1023,7 +1820,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const st: Partial<EditorState> = {
         opacity: obj.opacity ?? 1,
         strokeW: obj.strokeWidth || 0,
-        strokeC: (obj.stroke as string) || '#ffffff',
+        strokeC: typeof obj.stroke === 'string' && obj.stroke ? obj.stroke : '#ffffff',
         fill: '#ffffff',
         bg: (obj.backgroundColor as string) || 'transparent',
         font: (obj as any).fontFamily || 'Inter',
@@ -1044,9 +1841,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       };
 
       if (obj.shadow && typeof obj.shadow !== 'string') {
-        st.shadowB = (obj.shadow as fabric.Shadow).blur || 0;
-        st.shadowO = (obj.shadow as fabric.Shadow).offsetX || 10;
+        // `??` not `||`: a 0-offset glow shadow is legitimate and must show as 0,
+        // not resurrect the default 10.
+        st.shadowB = (obj.shadow as fabric.Shadow).blur ?? 0;
+        st.shadowO = (obj.shadow as fabric.Shadow).offsetX ?? 10;
         st.shadowC = (obj.shadow as fabric.Shadow).color || '#000000';
+      } else {
+        // No shadow — reset, or the sliders keep showing the PREVIOUS
+        // object's shadow values (same class as the old adjustment-slider bug).
+        st.shadowB = 0;
+        st.shadowO = 10;
+        st.shadowC = '#000000';
       }
 
       // Gradient / pattern fills are not plain colors — anchor the solid picker on
@@ -1159,6 +1964,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     /* ----- canvas events ----- */
     c.on('object:modified', () => {
       updateLayersDebounced();
+      // Repositioning the temp mask shape is not a document change — no
+      // history entry, no autosave (the temp shape must never reach a
+      // snapshot or the user's undo stack).
+      if (maskShapeRef.current) return;
       saveHistory();
       scheduleSaveRef.current();
     });
@@ -1177,6 +1986,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
     });
     c.on('text:changed', () => scheduleSaveRef.current());
+    // NB: no text:editing:exited handler needed — fabric's exitEditing fires
+    // 'modified' on the object when the text changed, which forwards to the
+    // canvas 'object:modified' handler above (verified: it commits there).
+    // Adding a second commit here would push duplicate entries and make the
+    // first undo a silent no-op.
 
     /* ----- transform UX: 45° rotation snap, size/angle badge, center guides ----- */
     const setBadge = (x: number, y: number, text: string, accent: boolean) => {
@@ -1366,6 +2180,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           }
           c.renderAll();
           updateLayersNow();
+          // guarded filter pass for legacy / oversized sources (see restoreEntry)
+          // + restore filter provenance flags from serialized meta
+          c.getObjects().forEach((o) => {
+            if (o.type === 'image') {
+              retagFiltersFromMeta(o as fabric.Image);
+              if ((o as fabric.Image).filters?.length) applyFiltersSafe(o as fabric.Image);
+            }
+          });
+          c.renderAll();
           isLockedRef.current = false;
           saveHistory();
           zoomFitFn();
@@ -1550,8 +2373,35 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
       }
 
-      /* --- modifier combos (canvas-level; suppressed while typing in DOM inputs) --- */
+      // Transient-UI guards, evaluated ONCE at the top: modifier combos and
+      // plain keys below BOTH need them. They used to run only before the
+      // plain section — so Ctrl+Z silently undid the document UNDER the crop
+      // modal (and, with the active object gone, handleCrop could never
+      // Apply-close it), and Ctrl+D duplicated the temp mask shape.
+      const modalOpen = paletteOpen || shortcutsOpen || !!cropData || menu === 'EXPORT';
+      const masking = !!maskShapeRef.current;
+      const ae = document.activeElement as HTMLInputElement | null;
+      const aeBlocks =
+        !!ae &&
+        (ae.tagName === 'TEXTAREA' ||
+          ae.isContentEditable ||
+          (ae.tagName === 'INPUT' && !['range', 'color', 'checkbox', 'radio'].includes((ae.type || '').toLowerCase())));
+      const fabricEditing = !!(c.getActiveObject() as any)?.isEditing;
+
+      // Escape gets first crack at the topmost transient mode — it must run
+      // BEFORE the masking guard or Esc can never finish MASK_EDIT.
+      if (e.key === 'Escape' && !aeBlocks) {
+        if (masking) {
+          finishMasking(false);
+          return;
+        }
+        if (modalOpen) return; // open modals own their Escape handling
+      }
+
+      /* --- modifier combos (canvas-level; suppressed while typing in DOM
+             inputs, under open modals, or while the temp mask shape is live) --- */
       if (mod && !domTyping()) {
+        if (modalOpen || masking) return;
         if (e.key.toLowerCase() === 'z') {
           e.preventDefault();
           if (e.shiftKey) redo();
@@ -1614,18 +2464,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 
       // Plain keys stay live over range/color inputs (shortcuts keep working after
       // touching a slider) but stay blocked for text inputs and fabric text editing.
-      const ae = document.activeElement as HTMLInputElement | null;
-      const aeBlocks =
-        !!ae &&
-        (ae.tagName === 'TEXTAREA' ||
-          ae.isContentEditable ||
-          (ae.tagName === 'INPUT' && !['range', 'color', 'checkbox', 'radio'].includes((ae.type || '').toLowerCase())));
-      const fabricEditing = !!(c.getActiveObject() as any)?.isEditing;
-      if (aeBlocks || fabricEditing || paletteOpen || shortcutsOpen || cropData || menu === 'EXPORT') return;
+      if (aeBlocks || fabricEditing || modalOpen) return;
 
       // While a mask shape is being positioned, the ACTIVE object IS the temp
       // shape — plain shortcuts must not fire (Escape above still finishes it).
-      if (maskShapeRef.current) return;
+      if (masking) return;
 
       /* --- plain keys --- */
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1637,11 +2480,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         return;
       }
       if (e.key === 'Escape') {
-        // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
-        if (menu === 'MASK_EDIT' && maskShapeRef.current) {
-          finishMasking(false);
-          return;
-        }
         if (menu !== 'HOME') setMenuState('HOME');
         else c.discardActiveObject();
         c.requestRenderAll();
@@ -1759,6 +2597,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const getActive = useCallback(() => canvasRef.current?.getActiveObject() ?? activeObjRef.current ?? null, []);
 
   /** Adjust/filter/crop need an image — rasterize shapes & text once (undoable). */
+  const pendingAdjustRef = useRef<{ retry: () => void } | null>(null);
   const ensureAdjustableImage = useCallback(
     (retry?: () => void): boolean => {
       const c = canvasRef.current;
@@ -1766,16 +2605,25 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (!c || !obj) return false;
       if (obj.type === 'image') return true;
       if ((obj as any).type === 'activeSelection') return false;
-      // Slider ticks retrigger this — only ONE rasterize may run per object
+      // Slider ticks retrigger this — only ONE rasterize may run per object.
+      // Ticks arriving while busy replace the pending replay, so the FINAL
+      // slider value is what gets applied (not the first tick).
+      if (retry) pendingAdjustRef.current = { retry };
       if (rasterBusyRef.current) return false;
       rasterBusyRef.current = true;
       toast('Rasterizing for adjustments — undo restores the original', 'info');
       const myToken = ++lockTokenRef.current;
       rasterizeObjectToImage(obj, (obj as any).onyxCropShape || null).then((img) => {
         rasterBusyRef.current = false;
-        if (!img) return;
+        if (!img) {
+          pendingAdjustRef.current = null;
+          return;
+        }
         // the user may have deleted / undone / switched selection mid-flight
-        if ((obj as any).canvas !== c) return;
+        if ((obj as any).canvas !== c) {
+          pendingAdjustRef.current = null;
+          return;
+        }
         const idx = c.getObjects().indexOf(obj);
         const keepSelection = !c.getActiveObject() || c.getActiveObject() === obj;
         isLockedRef.current = true;
@@ -1788,16 +2636,28 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           if (lockTokenRef.current === myToken) isLockedRef.current = false;
         }
         updateLayersNow();
-        // NOTE: no saveHistory here — the caller's commit (slider onCommit /
-        // filter apply / crop apply) pushes ONE history entry covering the
-        // rasterize + the adjustment, so a single undo restores the vector original.
+        // The caller's commit (slider onCommit / filter apply) pushes the settle
+        // entry — but a FAST FLICK releases the slider BEFORE the rasterize
+        // lands, and saveHistory no-ops while rasterBusy, so that commit fired
+        // on the pre-rasterize state. The commit after the replay below records
+        // the real end state (identical consecutive states are collapsed).
         scheduleSaveRef.current();
         if (keepSelection) syncFromObject(img);
-        retry?.();
+        const pending = pendingAdjustRef.current;
+        pendingAdjustRef.current = null;
+        // Replay ONLY when the rasterized image is (still) the selection: the
+        // retry closures re-read getActive(), so replaying after a mid-flight
+        // selection switch would apply the OLD object's slider value to
+        // whatever is selected now — wrong object, uncommitted.
+        if (keepSelection) pending?.retry();
+        else if (pending) toast('Selection changed — adjustment not applied', 'info');
+        // The rasterize + replayed adjustment is a REAL state change — record it
+        // (see the note above: the flick case never got its own entry).
+        commitHistory();
       });
       return false;
     },
-    [getActive, updateLayersNow, syncFromObject, toast]
+    [getActive, updateLayersNow, syncFromObject, toast, commitHistory]
   );
 
   const apiAddImageFromFile = useCallback(
@@ -1814,9 +2674,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
       const reader = new FileReader();
       reader.onload = (ev) => {
-        fabric.Image.fromURL(ev.target?.result as string, (img) => {
+        void loadImageP(ev.target?.result as string).then((img) => {
           const cv = canvasRef.current;
           if (!cv) return;
+          if (!img) {
+            toast('Could not decode that image — try another file', 'error');
+            return;
+          }
           const userObjs = cv.getObjects().filter((o) => (o as any).name !== FRAME_NAME);
           img.set({ name: 'Image' });
           if (userObjs.length === 0) {
@@ -1870,9 +2734,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     if (!f || !c) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      fabric.Image.fromURL(ev.target?.result as string, (img) => {
+      void loadImageP(ev.target?.result as string).then((img) => {
         const cv = canvasRef.current;
-        if (!cv) return;
+        if (!cv || !img) return;
         const { width: dw, height: dh } = docSizeRef.current;
         isLockedRef.current = true;
         try {
@@ -1930,12 +2794,25 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
       const img = obj as fabric.Image;
       const type = ADJUST_TYPE[key];
-      img.filters = (img.filters || []).filter((f: any) => f?.type !== type);
+      // Remove only THIS key's adjustment filter (tagged). Untagged filters of
+      // the same type are legacy saves — claim those too, but NEVER a
+      // preset/RemoveColor filter: the old type-based removal let the Blur
+      // ADJUSTMENT silently delete the Blur PRESET from under the FilterPanel.
+      img.filters = (img.filters || []).filter(
+        (f: any) =>
+          !(
+            f?.onyxAdjust === key ||
+            (!f?.onyxPreset && !f?.onyxRemove && !f?.onyxAdjust && f?.type === type)
+          )
+      );
       if (value !== 0) {
         const def = ADJUSTMENTS.find((a) => a.key === key)!;
-        img.filters.push(def.make(value));
+        const f = def.make(value) as any;
+        f.onyxAdjust = key;
+        img.filters.push(f);
       }
-      img.applyFilters();
+      syncFilterMeta(img);
+      applyFiltersSafe(img);
       setEditorState((prev) => ({ ...prev, [key]: value }));
       canvasRef.current?.requestRenderAll();
       scheduleSaveRef.current();
@@ -1963,12 +2840,29 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (!preset) return;
       img.filters = (img.filters || []).filter((f: any) => !f?.onyxPreset);
       const f = preset.make() as any;
+      let collideKey: AdjustmentKey | undefined;
       if (f) {
+        // A preset whose filter type collides with an adjustment (Blur) must
+        // SUPERSEDE that adjustment — keeping both stacks two blur passes
+        // (double blur) while the panel still shows the old slider value.
+        collideKey = (Object.keys(ADJUST_TYPE) as AdjustmentKey[]).find(
+          (k) => ADJUST_TYPE[k] === f.type
+        );
+        if (collideKey) {
+          img.filters = img.filters.filter((fl: any) => fl?.onyxAdjust !== collideKey);
+        }
         f.onyxPreset = name;
         img.filters.push(f);
       }
-      img.applyFilters();
-      setEditorState((prev) => ({ ...prev, filterPreset: name }));
+      syncFilterMeta(img);
+      applyFiltersSafe(img);
+      setEditorState((prev) => {
+        const next = { ...prev, filterPreset: name };
+        // zero the superseded adjustment slider so the panel stops claiming a
+        // value that no longer exists in the filter stack
+        if (collideKey) (next as any)[collideKey] = 0;
+        return next;
+      });
       canvasRef.current?.requestRenderAll();
       commitHistory();
       toast(`Filter: ${name}`, 'info');
@@ -1995,7 +2889,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         f.onyxRemove = true;
         img.filters.push(f);
       }
-      img.applyFilters();
+      syncFilterMeta(img);
+      applyFiltersSafe(img);
       setEditorState((prev) => ({ ...prev, removeColorOn: on }));
       canvasRef.current?.requestRenderAll();
       commitHistory();
@@ -2020,7 +2915,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
         return f;
       });
-      img.applyFilters();
+      applyFiltersSafe(img);
       setEditorState((prev) => ({ ...prev, removeColorHex: hex, removeColorDist: dist }));
       canvasRef.current?.requestRenderAll();
       scheduleSaveRef.current();
@@ -2041,15 +2936,19 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (hold) {
         if (compareStashRef.current) return;
         // stash the OWNER too — a stale stash must never leak onto another image
-        compareStashRef.current = { obj: img, filters: img.filters || [] } as any;
+        compareStashRef.current = { obj: img, filters: img.filters || [] };
         img.filters = [];
+        applyFiltersSafe(img);
       } else {
-        const stash = compareStashRef.current as any;
-        if (!stash) return;
-        if (stash.obj === img) img.filters = stash.filters;
+        // release: restore by the stash OWNER, not by the current selection —
+        // the user may have deselected / switched objects while holding
+        const stash = compareStashRef.current;
         compareStashRef.current = null;
+        if (stash && stash.obj.canvas) {
+          stash.obj.filters = stash.filters || [];
+          applyFiltersSafe(stash.obj);
+        }
       }
-      img.applyFilters();
       canvasRef.current?.requestRenderAll();
     },
     [getActive, ensureAdjustableImage]
@@ -2076,14 +2975,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         case 'shadowB':
         case 'shadowO':
         case 'shadowC': {
-          const cur = (obj.shadow as fabric.Shadow) || { blur: 0, offsetX: 10, color: '#000000' };
+          const cur: any =
+            obj.shadow && typeof obj.shadow !== 'string' ? (obj.shadow as fabric.Shadow) : null;
           obj.set(
             'shadow',
             new fabric.Shadow({
-              color: key === 'shadowC' ? v : cur.color || '#000000',
-              blur: key === 'shadowB' ? parseInt(v) || 0 : cur.blur || 0,
-              offsetX: key === 'shadowO' ? parseInt(v) || 0 : cur.offsetX || 10,
-              offsetY: key === 'shadowO' ? parseInt(v) || 0 : cur.offsetY || 10,
+              color: key === 'shadowC' ? v : cur?.color || '#000000',
+              blur: key === 'shadowB' ? parseInt(v) || 0 : cur?.blur ?? 0,
+              // `??` not `||` on the untouched axes: an explicit 0 offset (glow
+              // use-case) must survive a later Blur/Color change as 0.
+              offsetX: key === 'shadowO' ? parseInt(v) || 0 : cur?.offsetX ?? 10,
+              offsetY: key === 'shadowO' ? parseInt(v) || 0 : cur?.offsetY ?? 10,
             })
           );
           break;
@@ -2195,214 +3097,318 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     setMenuState('STYLE');
   }, []);
 
-  /* ---------------- border stack (fancy multi-borders) ---------------- */
-
-  const computeRings = (cfg: BorderStackConfig): BorderRing[] => {
-    const n = clamp(Math.round(cfg.count), 1, MAX_BORDERS);
-    if (cfg.mode === 'custom' && cfg.rings?.length) {
-      return cfg.rings.slice(0, n).map((r) => ({ width: clamp(r.width, 1, 60), color: r.color }));
-    }
-    const rings: BorderRing[] = [];
-    for (let i = 0; i < n; i++) {
-      const t = n === 1 ? 0 : i / (n - 1);
-      rings.push({
-        width: cfg.widthMin + (cfg.widthMax - cfg.widthMin) * t,
-        color: mixHex(cfg.colorA, cfg.colorB, t),
+  /** Unwrap an attachment group (borders / advanced shadow) → the core object
+   *  plus the configs that were attached, so either effect can be re-applied
+   *  without losing the other. */
+  const unwrapAttachGroup = useCallback(
+    (c: fabric.Canvas, group: fabric.Group): { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null => {
+      const items = [...group.getObjects()];
+      const gIdx = c.getObjects().indexOf(group);
+      const cfgs = {
+        ring: (group as any).onyxRingCfg as BorderStackConfig | undefined,
+        shadow: (group as any).onyxShadowCfg as ShadowFxConfig | undefined,
+      };
+      group.destroy();
+      (group as any)._objects = [];
+      c.remove(group);
+      let core: fabric.Object | null = null;
+      items.forEach((o) => {
+        if ((o as any).onyxRingPart || (o as any).onyxShadowPart) return;
+        // restore the core at the group's old stack position (no z-order jump)
+        c.insertAt(o, Math.max(0, Math.min(gIdx, c.getObjects().length)), false);
+        o.setCoords();
+        core = o;
       });
-    }
-    return rings;
-  };
+      return core ? { core, ...cfgs } : null;
+    },
+    []
+  );
 
-  /** Unwrap a border-ring group → returns the core object (rings are dropped) */
-  const unwrapRingGroup = useCallback((c: fabric.Canvas, group: fabric.Group): fabric.Object | null => {
-    const items = [...group.getObjects()];
-    const gIdx = c.getObjects().indexOf(group);
-    group.destroy();
-    (group as any)._objects = [];
-    c.remove(group);
-    let core: fabric.Object | null = null;
-    items.forEach((o) => {
-      if ((o as any).onyxRingPart) return;
-      // restore the core at the group's old stack position (no z-order jump)
-      c.insertAt(o, Math.max(0, Math.min(gIdx, c.getObjects().length)), false);
-      o.setCoords();
-      core = o;
-    });
-    return core;
-  }, []);
+  /** Wrap the target (plus its ring/shadow attachment images) into ONE group.
+   *  Shared by the border builder and the shadow builder — re-applying either
+   *  edits the same core object and keeps the other effect intact. */
+  const rewrapWithAttachments = useCallback(
+    (
+      target: fabric.Object,
+      cfgs: { ring?: BorderStackConfig; shadow?: ShadowFxConfig },
+      focus: 'ring' | 'shadow',
+      prev: { ring?: BorderStackConfig; shadow?: ShadowFxConfig } = {}
+    ) => {
+      const c = canvasRef.current;
+      if (!c) return;
+      borderBusyRef.current = true;
+      isLockedRef.current = true;
+      const myToken = ++lockTokenRef.current;
+      const center = target.getCenterPoint();
+      const angle = target.angle || 0;
+      (async () => {
+        let ok = false;
+        try {
+          // the user may have deleted / undone the target while we were building
+          if ((target as any).canvas !== c) return;
+          let ringImg: fabric.Image | null = null;
+          let shadowImg: fabric.Image | null = null;
+          if (cfgs.ring) {
+            const rc = buildRingCanvas(target, cfgs.ring);
+            if (rc) {
+              ringImg = await loadImageP(rc.canvas.toDataURL('image/png'));
+              if (ringImg) {
+                ringImg.set({
+                  originX: 'center',
+                  originY: 'center',
+                  left: center.x,
+                  top: center.y,
+                  angle,
+                  // asymmetric crop shapes must flip WITH the object
+                  flipX: !!(target as any).flipX,
+                  flipY: !!(target as any).flipY,
+                  scaleX: 1 / rc.m,
+                  scaleY: 1 / rc.m,
+                } as any);
+                (ringImg as any).onyxRingPart = true;
+              }
+            }
+          }
+          if (cfgs.shadow) {
+            const sc = await buildShadowCanvas(target, cfgs.shadow);
+            if (sc) {
+              shadowImg = await loadImageP(sc.canvas.toDataURL('image/png'));
+              if (shadowImg) {
+                shadowImg.set({
+                  originX: 'center',
+                  originY: 'center',
+                  left: center.x,
+                  top: center.y,
+                  // NB: the silhouette raster is axis-aligned (rotation baked in
+                  // by rasterizeToCanvas) — applying `angle` again would rotate
+                  // the shadow 2× the object's rotation.
+                  scaleX: 1 / sc.m,
+                  scaleY: 1 / sc.m,
+                } as any);
+                (shadowImg as any).onyxShadowPart = true;
+              }
+            }
+          }
+          if (!ringImg && !shadowImg) {
+            toast(focus === 'ring' ? 'Object is too small to border' : 'Shadow failed — try smaller values', 'warning');
+            // best effort: restore whatever effects the object had before
+            if (prev.ring || prev.shadow) rewrapWithAttachments(target, prev, prev.ring ? 'ring' : 'shadow');
+            return;
+          }
+          // re-validate AFTER the async build: undo/delete/move may have happened
+          // while we awaited. A stale target must never resurrect onto the canvas.
+          if ((target as any).canvas !== c) return;
+          const freshCenter = target.getCenterPoint();
+          const freshAngle = target.angle || 0;
+          if (ringImg)
+            ringImg.set({ left: freshCenter.x, top: freshCenter.y, angle: freshAngle } as any);
+          if (shadowImg) shadowImg.set({ left: freshCenter.x, top: freshCenter.y } as any);
+          const freshIdx = c.getObjects().indexOf(target);
+          c.remove(target);
+          const members = [shadowImg, ringImg, target].filter(Boolean) as fabric.Object[];
+          const label =
+            (ringImg && shadowImg && 'bordered + shadow') ||
+            (ringImg && 'bordered') ||
+            'shadow';
+          const group = new fabric.Group(members, {
+            name: `${(target as any).name || 'Object'} · ${label}`,
+          } as any);
+          (group as any).onyxRing = !!ringImg;
+          if (cfgs.ring) (group as any).onyxRingCfg = cfgs.ring;
+          if (cfgs.shadow) (group as any).onyxShadowCfg = cfgs.shadow;
+          // keep the layer where the target lives NOW (fresh z-index after any
+          // concurrent layer ops during the build)
+          c.insertAt(group, Math.max(0, Math.min(freshIdx, c.getObjects().length)), false);
+          c.setActiveObject(group);
+          c.requestRenderAll();
+          ok = true;
+        } catch {
+          toast('Effect failed — try smaller values', 'error');
+        } finally {
+          // Token-guard BOTH flags: the failure-restore path above re-enters
+          // rewrapWithAttachments (un-awaited). That recursion bumps the lock
+          // token and owns the cleanup from here on — unconditionally clearing
+          // borderBusyRef here would re-open the re-entrancy window the guard
+          // exists for (concurrent apply/undo racing the in-flight rebuild).
+          if (lockTokenRef.current === myToken) {
+            isLockedRef.current = false;
+            borderBusyRef.current = false;
+          }
+        }
+        if (ok) {
+          // History/save OUTSIDE the lock — saveHistory is a no-op while locked
+          updateLayersNow();
+          saveHistory();
+          scheduleSaveRef.current();
+          toast(
+            focus === 'ring'
+              ? 'Border stack applied'
+              : cfgs.ring
+                ? 'Shadow + borders applied'
+                : 'Advanced shadow applied',
+            'success'
+          );
+        }
+      })();
+    },
+    [updateLayersNow, saveHistory, toast]
+  );
+
+  /** Resolve the selection into (core object + current attachment cfgs).
+   *  Unwraps an existing attachment group; validates everything else. */
+  const resolveAttachmentTarget = useCallback(
+    (): { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null => {
+      const c = canvasRef.current;
+      let target = getActive();
+      if (!c || !target) {
+        toast('Select an object first', 'warning');
+        return null;
+      }
+      if ((target as any).type === 'activeSelection') {
+        toast('Select a single object', 'warning');
+        return null;
+      }
+      if (target.type === 'group') {
+        if (!(target as any).onyxRing && !(target as any).onyxShadowCfg) {
+          toast('Effects work on single objects — ungroup first', 'warning');
+          return null;
+        }
+        isLockedRef.current = true;
+        try {
+          const u = unwrapAttachGroup(c, target as fabric.Group);
+          if (!u) return null;
+          target = u.core;
+          return { core: target, ring: u.ring, shadow: u.shadow };
+        } finally {
+          isLockedRef.current = false;
+        }
+      }
+      return { core: target };
+    },
+    [getActive, unwrapAttachGroup, toast]
+  );
 
   /**
-   * Wrap the selected object in a stack of concentric rings.
-   * ALL rings render into ONE offscreen canvas → ONE image layer — that is what
-   * makes up to 1024 borders viable (vs 1024 fabric objects).
-   * Ring geometry follows the object: circle/rect-radius/polygon shapes, or the
-   * object's crop shape (e.g. circle rings around a circle-cropped photo).
-   * Re-applying on an existing ring group edits it (unwrap → re-wrap).
+   * Wrap the selected object in a stack of concentric rings (up to 1024, all
+   * rendered into ONE image layer). Ring geometry follows the object: its crop
+   * shape, its native shape — or stays on the full frame when only MASKED.
    */
   const applyBorderStack = useCallback(
     (cfg: BorderStackConfig) => {
       const c = canvasRef.current;
       if (!c || borderBusyRef.current) return;
-      let target = getActive();
-      if (!target) {
-        toast('Select an object first', 'warning');
-        return;
-      }
-      if ((target as any).type === 'activeSelection') {
-        toast('Select a single object to border it', 'warning');
-        return;
-      }
-      if (target.type === 'group' && !(target as any).onyxRing) {
-        toast('Borders work on single objects — ungroup first', 'warning');
-        return;
-      }
-      // Unwrap an existing ring group so re-applying edits the SAME core object.
-      // Locked: unwrap fires object:added / object:removed.
-      if (target.type === 'group' && (target as any).onyxRing) {
-        isLockedRef.current = true;
-        try {
-          const core = unwrapRingGroup(c, target as fabric.Group);
-          if (!core) return;
-          target = core;
-        } finally {
-          isLockedRef.current = false;
-        }
-      }
-
-      const rings = computeRings(cfg);
-      if (!rings.length) return;
-      const bw = target.getScaledWidth();
-      const bh = target.getScaledHeight();
-      if (bw < 4 || bh < 4) {
+      // validate the size BEFORE unwrapping — an aborted apply must never strip
+      // the object's existing border/shadow effects
+      const active = getActive();
+      const peek: fabric.Object | undefined =
+        active?.type === 'group'
+          ? (active as fabric.Group)
+              .getObjects()
+              .find((o) => !(o as any).onyxRingPart && !(o as any).onyxShadowPart)
+          : (active as fabric.Object) || undefined;
+      if (peek && (peek.getScaledWidth() < 4 || peek.getScaledHeight() < 4)) {
         toast('Object is too small to border', 'warning');
         return;
       }
-      const center = target.getCenterPoint();
-      const angle = target.angle || 0;
-
-      // Rings follow the object's bbox or its crop shape — a reversible MASK
-      // (clipPath) still has its full bbox, so hint at the real-crop flow.
-      if ((target as any).clipPath && !(target as any).onyxCropShape) {
-        toast('Tip: use Mask → Crop so borders follow the masked shape', 'info');
-      }
-
-      // Ring geometry: center offset of each ring from the object edge
-      let acc = 0;
-      const layout = rings.map((r) => {
-        acc += r.width / 2;
-        const centerOff = acc;
-        acc += cfg.gap;
-        return { ...r, centerOff };
-      });
-      const outer = Math.max(1, ...layout.map((l) => l.centerOff + l.width / 2));
-
-      // Render every ring into a single offscreen canvas.
-      // Hard cap 4096px/side — iOS Safari fails above ~16MP canvases.
-      const fullW = bw + 2 * outer;
-      const fullH = bh + 2 * outer;
-      const CAP = 4096;
-      const m = clamp(Math.min(3, CAP / Math.max(fullW, fullH)), 0.02, 3);
-      const rc = document.createElement('canvas');
-      rc.width = Math.max(2, Math.ceil(fullW * m));
-      rc.height = Math.max(2, Math.ceil(fullH * m));
-      const rctx = rc.getContext('2d');
-      if (!rctx) {
-        toast('Border render failed on this device — try fewer borders', 'error');
+      const t = resolveAttachmentTarget();
+      if (!t) return;
+      const target = t.core;
+      if (target.getScaledWidth() < 4 || target.getScaledHeight() < 4) {
+        toast('Object is too small to border', 'warning');
         return;
       }
-      rctx.lineJoin = 'round';
-      rctx.lineCap = 'round';
-      const trace = ringPathFor(target);
-      // Draw outermost first — inner rings overlap the seam, hiding hairline gaps
-      for (let i = layout.length - 1; i >= 0; i--) {
-        const l = layout[i];
-        const rw = (bw + 2 * l.centerOff) * m + 1.5;
-        const rh = (bh + 2 * l.centerOff) * m + 1.5;
-        rctx.save();
-        // paths are built in 0..rw × 0..rh space — center that box on the canvas
-        rctx.translate((rc.width - rw) / 2, (rc.height - rh) / 2);
-        rctx.lineWidth = Math.max(0.6, l.width * m);
-        rctx.strokeStyle = l.color;
-        rctx.stroke(trace(rw, rh));
-        rctx.restore();
+      // A reversible MASK keeps the object's full bbox — the border wraps that
+      // full frame (square for a square→circle mask). Only the real Crop makes
+      // borders follow the shape.
+      if ((target as any).clipPath && !(target as any).onyxCropShape) {
+        toast('Masked: border wraps the FULL frame — use Crop for shape-following borders', 'info');
       }
-
-      borderBusyRef.current = true;
-      isLockedRef.current = true;
-      const myToken = ++lockTokenRef.current;
-      const targetIdx = c.getObjects().indexOf(target);
-      try {
-        const ringUrl = rc.toDataURL('image/png');
-        fabric.Image.fromURL(ringUrl, (ringImg: fabric.Image) => {
-          try {
-            // the user may have deleted / undone the target while the image loaded
-            if ((target as any).canvas !== c) return;
-            ringImg.set({
-              originX: 'center',
-              originY: 'center',
-              left: center.x,
-              top: center.y,
-              angle,
-              scaleX: 1 / m,
-              scaleY: 1 / m,
-            } as any);
-            (ringImg as any).onyxRingPart = true;
-            c.remove(target!);
-            const group = new fabric.Group([ringImg, target!], {
-              name: `${(target as any).name || 'Object'} · bordered`,
-            } as any);
-            (group as any).onyxRing = true;
-            (group as any).onyxRingCfg = cfg;
-            // keep the layer where the target was (no z-order jump)
-            c.insertAt(group, Math.max(0, Math.min(targetIdx, c.getObjects().length)), false);
-            c.setActiveObject(group);
-            c.requestRenderAll();
-          } catch {
-            toast('Border failed — try a smaller stack', 'error');
-          } finally {
-            if (lockTokenRef.current === myToken) isLockedRef.current = false;
-            borderBusyRef.current = false;
-          }
-          if ((target as any).canvas === c) {
-            // History/save OUTSIDE the lock — saveHistory is a no-op while locked
-            updateLayersNow();
-            saveHistory();
-            scheduleSaveRef.current();
-            toast(`Applied ${rings.length} border${rings.length > 1 ? 's' : ''}`, 'success');
-          }
-        });
-      } catch {
-        isLockedRef.current = false;
-        borderBusyRef.current = false;
-        toast('Border render failed — try fewer/thinner borders', 'error');
-      }
+      rewrapWithAttachments(target, { ring: cfg, shadow: t.shadow }, 'ring', { ring: t.ring, shadow: t.shadow });
     },
-    [getActive, unwrapRingGroup, updateLayersNow, saveHistory, toast]
+    [getActive, resolveAttachmentTarget, rewrapWithAttachments, toast]
   );
 
-  /** Remove a border stack, restoring the original object */
+  /** Remove the border stack — an advanced shadow (if any) survives. */
   const removeBorderStack = useCallback(() => {
     const c = canvasRef.current;
     const obj = getActive();
     if (!c || !obj) return;
-    if (obj.type !== 'group' || !(obj as any).onyxRing) {
+    if (obj.type !== 'group' || (!(obj as any).onyxRing && !(obj as any).onyxShadowCfg)) {
       toast('Select a bordered object first', 'warning');
       return;
     }
+    if (borderBusyRef.current) return; // a rebuild is in flight
     isLockedRef.current = true;
+    let u: { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null = null;
+    let rewrap = false;
     try {
-      const core = unwrapRingGroup(c, obj as fabric.Group);
-      c.requestRenderAll();
-      if (core) c.setActiveObject(core);
+      u = unwrapAttachGroup(c, obj as fabric.Group);
+      if (u?.shadow) rewrap = true;
+      else {
+        c.requestRenderAll();
+        if (u) c.setActiveObject(u.core);
+      }
     } finally {
-      isLockedRef.current = false;
+      // The rewrap path re-locks itself (and owns its own unlock token);
+      // only the plain path releases the guard here.
+      if (!rewrap) isLockedRef.current = false;
+    }
+    if (rewrap && u) {
+      // borders removed but the shadow stays attached
+      rewrapWithAttachments(u.core, { shadow: u.shadow }, 'shadow');
+      return;
     }
     // History/save OUTSIDE the lock — saveHistory is a no-op while locked
     updateLayersNow();
     saveHistory();
     scheduleSaveRef.current();
     toast('Borders removed', 'info');
-  }, [getActive, unwrapRingGroup, updateLayersNow, saveHistory, toast]);
+  }, [getActive, unwrapAttachGroup, rewrapWithAttachments, updateLayersNow, saveHistory, toast]);
+
+  /** Apply / re-apply the advanced (gradient / 360°) shadow silhouette. */
+  const applyShadowFx = useCallback(
+    (cfg: ShadowFxConfig) => {
+      const c = canvasRef.current;
+      if (!c || borderBusyRef.current) return;
+      const t = resolveAttachmentTarget();
+      if (!t) return;
+      rewrapWithAttachments(t.core, { ring: t.ring, shadow: cfg }, 'shadow', { ring: t.ring, shadow: t.shadow });
+    },
+    [resolveAttachmentTarget, rewrapWithAttachments]
+  );
+
+  /** Remove the advanced shadow — a border stack (if any) survives. */
+  const removeShadowFx = useCallback(() => {
+    const c = canvasRef.current;
+    const obj = getActive();
+    if (!c || !obj) return;
+    if (obj.type !== 'group' || !(obj as any).onyxShadowCfg) {
+      toast('No advanced shadow on this object', 'info');
+      return;
+    }
+    if (borderBusyRef.current) return; // a rebuild is in flight
+    isLockedRef.current = true;
+    let u: { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null = null;
+    let rewrap = false;
+    try {
+      u = unwrapAttachGroup(c, obj as fabric.Group);
+      if (u?.ring) rewrap = true;
+      else {
+        c.requestRenderAll();
+        if (u) c.setActiveObject(u.core);
+      }
+    } finally {
+      if (!rewrap) isLockedRef.current = false;
+    }
+    if (rewrap && u) {
+      rewrapWithAttachments(u.core, { ring: u.ring }, 'ring');
+      return;
+    }
+    updateLayersNow();
+    saveHistory();
+    scheduleSaveRef.current();
+    toast('Shadow removed', 'info');
+  }, [getActive, unwrapAttachGroup, rewrapWithAttachments, updateLayersNow, saveHistory, toast]);
 
   /* ---------------- advanced fills (gradient / image) ---------------- */
 
@@ -2431,7 +3437,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (!obj || !c) return;
       const w = Math.max(8, Math.round((obj as any).width || 200));
       const h = Math.max(8, Math.round((obj as any).height || 200));
-      fabric.Image.fromURL(dataUrl, (img) => {
+      void loadImageP(dataUrl).then((img) => {
+        if (!img) return;
         const src = document.createElement('canvas');
         src.width = w;
         src.height = h;
@@ -2459,6 +3466,37 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const c = canvasRef.current;
       if (!obj || !c) return;
       obj.set({ fill: color === 'transparent' ? '' : color } as any);
+      c.requestRenderAll();
+      scheduleSaveRef.current();
+      commitHistory();
+    },
+    [getActive, commitHistory]
+  );
+
+  /** Gradient stroke for the plain single border (works on shapes, text, images) */
+  const setObjectGradientStroke = useCallback(
+    (css: string) => {
+      const obj = getActive();
+      const c = canvasRef.current;
+      if (!obj || !c) return;
+      const w = (obj as any).width || 100;
+      const h = (obj as any).height || 100;
+      const grad = buildFrameGradient(css, w, h);
+      obj.set({ stroke: grad, strokeUniform: true } as any);
+      c.requestRenderAll();
+      scheduleSaveRef.current();
+      commitHistory();
+    },
+    [getActive, commitHistory]
+  );
+
+  /** Back to a solid single-border stroke */
+  const setObjectSolidStroke = useCallback(
+    (color: string) => {
+      const obj = getActive();
+      const c = canvasRef.current;
+      if (!obj || !c) return;
+      obj.set({ stroke: color } as any);
       c.requestRenderAll();
       scheduleSaveRef.current();
       commitHistory();
@@ -2628,6 +3666,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       } else {
         c.add(cloned);
       }
+      // cloned filter instances lost their provenance flags — re-tag from the
+      // serialized meta so presets/adjustments/RemoveColor stay identifiable
+      retagObjectTree(cloned);
       c.setActiveObject(cloned);
       c.requestRenderAll();
     }, CANVAS_EXTRA_PROPS as any);
@@ -2640,6 +3681,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     src.clone((cloned: any) => {
       cloned.set({ left: (cloned.left || 0) + 32, top: (cloned.top || 0) + 32, evented: true });
       c.add(cloned);
+      retagObjectTree(cloned);
       c.setActiveObject(cloned);
       c.requestRenderAll();
     }, CANVAS_EXTRA_PROPS as any);
@@ -2822,11 +3864,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       // Crop works on ANY object — rasterize shapes/text once first
       ensureAdjustableImage(() => {
         const o = getActive();
-        if (o && o.type === 'image') setCropData((o as fabric.Image).toDataURL({}));
+        if (o && o.type === 'image') setCropData(unfilteredSnapshot(o as fabric.Image));
       });
       return;
     }
-    setCropData((obj as fabric.Image).toDataURL({}));
+    setCropData(unfilteredSnapshot(obj as fabric.Image));
   }, [getActive, toast, ensureAdjustableImage]);
 
   const handleCrop = useCallback((croppedDataUrl: string) => {
@@ -2834,6 +3876,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     const c = canvasRef.current;
     if (!obj || !c) return;
     (obj as fabric.Image).setSrc(croppedDataUrl, () => {
+      // setSrc internally re-runs the RAW applyFilters — route it through the
+      // guarded pass so an oversized crop result can never blank the image
+      if ((obj as fabric.Image).filters?.length) applyFiltersSafe(obj as fabric.Image);
       c?.requestRenderAll();
       setCropData(null);
       commitHistory();
@@ -2872,6 +3917,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         cornerSize: 10,
         padding: 0,
         name: 'Mask',
+        // transient scaffolding flag — filtered from the layers list and
+        // never serialized (not in CANVAS_EXTRA_PROPS)
+        onyxTempMask: true,
       };
 
       let maskShape: fabric.Object | null = null;
@@ -2898,8 +3946,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
 
       if (maskShape) {
-        c.add(maskShape);
-        c.setActiveObject(maskShape);
+        // Temp scaffolding — its add/remove must not push history entries or
+        // autosave (it would leak into undo states and project snapshots).
+        // Save/restore the lock so we never unlock an in-flight async op.
+        const wasLocked = isLockedRef.current;
+        isLockedRef.current = true;
+        try {
+          c.add(maskShape);
+          c.setActiveObject(maskShape);
+        } finally {
+          isLockedRef.current = wasLocked;
+        }
         maskShapeRef.current = maskShape;
         setMenuState('MASK_EDIT');
         obj.set({ selectable: false, evented: false });
@@ -2917,7 +3974,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     if (!c || !shape) return;
     const target = maskTargetRef.current;
     if (target) target.set({ selectable: true, evented: true });
-    c.remove(shape);
+    const wasLocked = isLockedRef.current;
+    isLockedRef.current = true;
+    try {
+      c.remove(shape);
+    } finally {
+      isLockedRef.current = wasLocked;
+    }
     maskShapeRef.current = null;
     maskTargetRef.current = null;
     c.requestRenderAll();
@@ -2957,7 +4020,13 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           });
           targetImg.clipPath = cloned;
           targetImg.set({ selectable: true, evented: true });
-          c.remove(maskShape);
+          const wasLocked = isLockedRef.current;
+          isLockedRef.current = true;
+          try {
+            c.remove(maskShape);
+          } finally {
+            isLockedRef.current = wasLocked;
+          }
           maskShapeRef.current = null;
           maskTargetRef.current = null;
           c.setActiveObject(targetImg);
@@ -3074,43 +4143,108 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   }, [updateLayersNow, commitHistory, apiOrder]);
 
   /* export api */
-  const exportImage = useCallback(
+  const runExport = useCallback(
     async (opts: ExportOptions): Promise<boolean> => {
-      const heavy =
-        (opts.targetW || (opts.region ? opts.region.width : docSizeRef.current.width) * (opts.scale || 1)) *
-          (opts.targetH || (opts.region ? opts.region.height : docSizeRef.current.height) * (opts.scale || 1)) >
-        40e6;
-      if (heavy) toast('Rendering large export — hold on…', 'info');
-      let out: { url: string; w: number; h: number } = { url: '', w: 0, h: 0 };
-      try {
-        out = renderDocDataURL({
-          format: opts.format,
-          quality: opts.quality,
-          scale: opts.scale,
-          targetWidth: opts.targetW,
-          targetHeight: opts.targetH,
-          transparent: opts.transparent,
-          shape: opts.shape,
-          shapeSides: opts.shapeSides,
-          region: opts.region,
-        });
-      } catch {
-        toast('Export failed — try a smaller size', 'error');
+      // Clamp the estimates to the device caps UP FRONT — otherwise a scale-
+      // based export (e.g. 4× of a 6000px doc) gets re-capped to the SAME
+      // size on the retry pass and the "half resolution" fallback never shrinks.
+      const caps = exportPixelCaps();
+      let estW = opts.targetW || Math.round((opts.region ? opts.region.width : docSizeRef.current.width) * (opts.scale || 1));
+      let estH = opts.targetH || Math.round((opts.region ? opts.region.height : docSizeRef.current.height) * (opts.scale || 1));
+      const capF = Math.min(1, caps.maxSide / Math.max(estW, estH), Math.sqrt(caps.maxMP / (estW * estH || 1)));
+      estW = Math.max(1, Math.floor(estW * capF));
+      estH = Math.max(1, Math.floor(estH * capF));
+
+      // Safari: clipboard.write needs a ClipboardItem created SYNCHRONOUSLY
+      // inside the user gesture — a multi-second render between the click and
+      // the write expires the transient activation. Feed it the render PROMISE
+      // instead (supported Safari 15.4+ / Chrome 97+), with a sequential
+      // fallback for older engines.
+      const wantPromiseClipboard =
+        opts.mode === 'copy' &&
+        typeof ClipboardItem !== 'undefined' &&
+        !!navigator.clipboard?.write;
+      // mode=copy without promise-clipboard support means the sequential path's
+      // ClipboardItem/clipboard.write call is GUARANTEED to throw — fail fast
+      // instead of rendering the whole (possibly multi-second 16K) image just
+      // to discover the write can never work (non-secure origins etc.).
+      if (opts.mode === 'copy' && !wantPromiseClipboard) {
+        toast('Clipboard not available in this browser', 'error');
         return false;
       }
-      if (!out.url || out.url.length < 64) {
-        toast('Export failed — this device can not render that size', 'error');
-        return false;
+      const mime = `image/${opts.format === 'jpeg' ? 'jpeg' : opts.format}`;
+
+      const renderOnce = async (f: number): Promise<{ blob: Blob; url: string; w: number; h: number } | null> => {
+        const w = Math.max(1, Math.round(estW * f));
+        const h = Math.max(1, Math.round(estH * f));
+        setExportBusy(`${w} × ${h} px`);
+        // Let the overlay paint before the (blocking) render work
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        try {
+          return await renderDocBlob({
+            format: opts.format,
+            quality: opts.quality,
+            scale: (opts.scale || 1) * f,
+            targetWidth: opts.targetW ? w : undefined,
+            targetHeight: opts.targetH ? h : undefined,
+            transparent: opts.format === 'jpeg' ? false : opts.transparent,
+            shape: opts.shape,
+            shapeSides: opts.shapeSides,
+            region: opts.region,
+          });
+        } catch {
+          return null;
+        }
+      };
+
+      // Two attempts: full size, then half (devices that cannot hold the canvas
+      // fail with a black image — better to auto-retry smaller than ship black).
+      const renderWithRetry = async (): Promise<{ blob: Blob; url: string; w: number; h: number } | null> => {
+        let out = await renderOnce(1);
+        if (!out) {
+          toast('That size failed on this device — retrying at half resolution…', 'warning');
+          out = await renderOnce(0.5);
+        }
+        setExportBusy(null);
+        if (!out) toast('Export failed — try a smaller resolution', 'error');
+        return out;
+      };
+
+      if (wantPromiseClipboard) {
+        const p = renderWithRetry();
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ [mime]: p.then((r) => r?.blob) } as any)]);
+          const done = await p;
+          if (done) URL.revokeObjectURL(done.url);
+          toast('Copied to clipboard', 'success');
+          scheduleSaveRef.current();
+          return true;
+        } catch {
+          // Always settle the render: (a) if it FAILED, its own "Export
+          // failed" toast already fired and a clipboard toast here would be
+          // misleading; (b) if it SUCCEEDED but the write was refused, the
+          // object URL must still be revoked or the blob stays pinned in
+          // memory until unload.
+          const done = await p.catch(() => null);
+          if (done) {
+            URL.revokeObjectURL(done.url);
+            toast('Clipboard not available in this browser', 'error');
+          }
+          return false;
+        }
       }
+
+      const out = await renderWithRetry();
+      if (!out) return false;
       const ext = opts.format === 'jpeg' ? 'jpg' : opts.format;
       if (opts.mode === 'copy') {
         try {
-          const blob = await (await fetch(out.url)).blob();
-          // label the clipboard payload with the REAL mime type
-          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob } as any)]);
+          await navigator.clipboard.write([new ClipboardItem({ [out.blob.type]: out.blob } as any)]);
+          URL.revokeObjectURL(out.url);
           toast('Copied to clipboard', 'success');
         } catch {
           toast('Clipboard not available in this browser', 'error');
+          URL.revokeObjectURL(out.url);
           return false;
         }
       } else {
@@ -3120,13 +4254,36 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }.${ext}`;
         link.href = out.url;
         link.click();
-        // Report the REAL (capped) dimensions, not the requested ones
+        // Give the download a moment before revoking the object URL
+        setTimeout(() => URL.revokeObjectURL(out!.url), 60_000);
+        // Report the REAL (capped/retried) dimensions, not the requested ones
         toast(`Exported ${out.w} × ${out.h} ${ext.toUpperCase()}`, 'success');
       }
       scheduleSaveRef.current();
       return true;
     },
-    [renderDocDataURL, toast]
+    [renderDocBlob, toast]
+  );
+
+  const exportImage = useCallback(
+    async (opts: ExportOptions): Promise<boolean> => {
+      // ONE export at a time, app-wide. The per-panel busy guards can't cover
+      // the cross-panel path (Escape closes the pick modal mid-render and
+      // re-enables the Download button → two concurrent 268-MP pipelines →
+      // renderer OOM, plus a last-writer-wins state restore that can leave the
+      // frame invisible).
+      if (exportBusyRef.current) {
+        toast('An export is already running — let it finish first', 'warning');
+        return false;
+      }
+      exportBusyRef.current = true;
+      try {
+        return await runExport(opts);
+      } finally {
+        exportBusyRef.current = false;
+      }
+    },
+    [runExport, toast]
   );
 
   /** PNG snapshot of the whole document — Pick-export preview */
@@ -3210,6 +4367,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       setObjectSolidFill,
       applyBorderStack: (cfg: BorderStackConfig) => void applyBorderStack(cfg),
       removeBorderStack,
+      applyShadowFx,
+      removeShadowFx,
+      setObjectGradientStroke,
+      setObjectSolidStroke,
       updateTransform,
       toggleDraw: apiToggleDraw,
       duplicate: apiDuplicate,
@@ -3247,7 +4408,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       apiToggleDraw, apiDuplicate, deleteSelected, applyShapeCrop,
       flip, rotate90, lockToggle, apiOrder, align, selectLayer, toggleLayerVisibility,
       reorderLayer, setLayerIndex, renameLayer, clearBgImage, addPolygon,
-      applyBorderStack, removeBorderStack, setObjectGradientFill, setObjectImageFill, setObjectSolidFill,
+      applyBorderStack, removeBorderStack, applyShadowFx, removeShadowFx,
+      setObjectGradientStroke, setObjectSolidStroke,
+      setObjectGradientFill, setObjectImageFill, setObjectSolidFill,
       undo, redo, exportImage, docPreviewUrl, renameProject, router,
     ]
   );
@@ -3297,6 +4460,16 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
               className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-indigo-400/40 bg-onyx-950/90 px-2 py-0.5 font-mono text-[11px] font-bold text-indigo-200 opacity-0 shadow-lg transition-opacity duration-150"
               style={{ left: 0, top: 0 }}
             />
+
+            {/* Export progress overlay — big renders are strip-rendered async
+                and must never look like the site died (or went black) */}
+            {exportBusy && (
+              <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-onyx-950/85 backdrop-blur-sm">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-400/25 border-t-indigo-400" />
+                <p className="font-mono text-xs font-bold text-indigo-200">Rendering {exportBusy}</p>
+                <p className="text-[10px] text-zinc-500">Large exports render in bands — keep this tab in the foreground</p>
+              </div>
+            )}
 
             {/* Dropzone ring */}
             {dragOver && (

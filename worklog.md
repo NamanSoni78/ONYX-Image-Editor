@@ -175,3 +175,28 @@ Hunters A (canvas core) / B (panels+export) / C (shell+mobile) returned 24 findi
 
 - `tsc --noEmit` → 0 errors · ESLint → 0 errors 0 warnings · `next build` → clean, 4/4 static routes.
 - Browser regression (agent-browser + pixel analysis): circle crop 400×400 @ (100,0) exact · circle rings 735×735 aspect 1.000, 0 corner px, dense at compass points · 1024 borders in ~1.4 s · layers drag (Circle below Text, canvas + list agree) · rotation drag to 47° → snapped 45° + badge `45° ✓` + hides on release · pick export 16 384×10 923 circle RGBA (corners [0,0,0,0]) · shape adjust rasterize (circle → image + Brightness) · ONE Ctrl+Z restores the vector original (with the slider still focused) · pick modal full-viewport · square crop 400×400 · locked Delete refused.
+
+---
+
+# ONYX v2.3 — Worklog
+
+## Phase 15 — v2.3 feature round
+
+- **WebGL-safe filter engine** — `ensureFilterSafeSource` probes `MAX_TEXTURE_SIZE` and downscales oversized sources (with async JPEG re-encode) before any filter pass; per-tick replay after the async swap; `_element === _originalElement` invariant maintained through the swap; safe re-run after every `loadFromJSON` (undo/redo + project loads). This is the fix for "fresh import + brightness → image 1/4 visible or gone".
+- **Custom export** — the 16K chip became a Custom button (exact W/H, ratio lock, caps kept) in BOTH ExportPanel and PickExportModal; flicker-free strip rendering, async blob pipeline, blank detection + half-res retry, export overlay.
+- **Gradient shadows** — ShadowFxBuilder: solid/gradient recolor of the object's silhouette, any direction + offset + spread for 360° coverage, screen-convention direction pad.
+- **Gradient borders** — single borders AND per-ring gradients in stacks (custom mode pads short arrays with white 6px defaults).
+- Mask = square ring on pseudo-bounds; crop = contour-following ring (intended asymmetry).
+
+## Phase 16 — Round 2 bug hunt (3 subagents) — 20 fixes
+
+See bugfix.md #77–96.
+
+## Phase 17 — Round 3 final QA hunt (3 subagents) — 20 more fixes
+
+Two HIGH history bugs (filter provenance lost on undo → preset stacking; slider reset never committed → "image disappears after adjust + undo"), two HIGH export bugs (ratio-flip capture oversample → legal exports failed blank; concurrent exports → renderer OOM), plus hold-compare leaks, remove-color commit, slider key coverage, Blur collision, no-op commit collapse, pick-modal custom-height reset, exponential draft parsing, region doc-edge clamp, clipboard fail-fast, README/SW versioning, 1024-ring low-m distortion, shadow 3σ pad, isotropic spread, gradient-stroke re-seed, history memory budget. See bugfix.md #97–116.
+
+## Phase 18 — Verification (all green)
+
+- `tsc --noEmit` 0 errors · ESLint 0/0 · `next build` 4/4 static routes.
+- Browser regression on the fresh build, all ✅: brightness on fresh import (full circle intact, 99.5k px); 9000×9000 oversize import + brightness (GPU limit 8192 — full circle, elements healthy); rapid multi-slider sweep (brightness/contrast/saturation/hue/blur) — circular profile intact by per-band analysis; adjust → Ctrl+Z reverts the filter with the image ALIVE; preset-after-undo replaces (no Grayscale/Sepia stacking — `onyxFilterMeta.slots` verified after round-trip); ratio-flip custom export 6000×750 → 2000×16000 exports non-blank; export busy guard blocks double export; 24-ring gradient stack renders (4099px part, +3 guard); gradient shadow spread-50 blur-25 builds a 3-layer merged group, undo→"bordered", redo→"bordered + shadow"; double-click reset commits (undo restores value, image alive); zero page errors.

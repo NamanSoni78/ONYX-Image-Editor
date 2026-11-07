@@ -37,11 +37,6 @@ export default function LandingPage() {
           </div>
 
           <div className="relative mx-auto max-w-6xl px-4 pb-20 pt-16 text-center sm:px-6 md:pt-24">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-[11px] font-bold text-zinc-300">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              v2.2 — true shape crops & pick-export up to 16K
-            </div>
-
             <h1 className="mx-auto max-w-3xl text-4xl font-black leading-[1.08] tracking-tight md:text-6xl">
               Edit images like a pro,
               <br />

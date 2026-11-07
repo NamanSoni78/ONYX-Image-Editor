@@ -21,7 +21,7 @@ export const TOOLS: ToolInfo[] = [
   {
     slug: 'filters',
     title: 'Filters',
-    description: '15 one-tap looks — Vintage, Kodak, Polaroid, Technicolor, Emboss and more, stackable with adjustments.',
+    description: '12 one-tap looks — Vintage, Kodak, Polaroid, Techni, Brownie and more, stackable with adjustments.',
     icon: 'filter',
   },
   {
@@ -75,7 +75,7 @@ export const TOOLS: ToolInfo[] = [
   {
     slug: 'projects',
     title: 'Autosaved projects',
-    description: 'Work is saved privately in your browser. Rename, duplicate, export and import project files.',
+    description: 'Work is saved privately in your browser. Rename, export and import project files.',
     icon: 'layers',
   },
   {

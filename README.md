@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor v2.2
+# 🎨 Onyx Image Editor v2.3
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,9 +6,28 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx v2.2** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
+**Onyx v2.3** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
 🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
+
+---
+
+## ✨ What's new in v2.3
+
+### 🌗 Gradient shadows & borders
+- **Advanced shadow builder**: gradient or solid shadow recolored from the object's own silhouette (crop shape included), thrown in any direction with **offset + spread for true 360° coverage** — a screen-convention direction pad, distance, blur, spread and opacity
+- **Gradient borders**: the plain single border **and every ring of a multi-border stack** can be a two-color gradient with its own angle
+
+### 🖼️ Export & filter engine
+- **Custom export** (replaces the fixed 16K chip) in both the Export panel and Pick-export: type any exact width/height or ratio — 1×/2×/4× chips and the 16 384 px / 268 MP device caps still apply
+- **WebGL-safe filter engine**: sources larger than the GPU texture limit are safely downscaled before Brightness/Contrast/any adjustment — the old "image turns invisible / quarter-visible after adjusting" bug is gone, including through undo/redo and project reloads
+- **Flicker-free strip rendering** for huge exports with per-strip blank detection, auto half-res retry and an app-wide one-export-at-a-time guard
+
+### 🧠 Under the hood
+- Filter provenance (preset / adjustment / remove-color) now survives undo, redo, copy/paste and project saves — presets no longer stack, RemoveColor no longer duplicates
+- History integrity: no-op commits collapse, mid-flight rasterize/hold-compare can no longer bake broken states, undo granularity is exact (adjusting then undoing reverts the adjustment — never your whole image)
+- Masked objects keep a **square** ring on their full pseudo-bounds; destructively cropped objects get a ring that **follows the cropped contour**
+- 40+ fixes across three parallel bug-hunt rounds — full lists in `bugfix.md`
 
 ---
 
@@ -22,7 +41,7 @@
 
 ### 🎯 Pick export
 - Full-screen, mask-style **region picker**: drag & resize a box anywhere on the canvas
-- Any output resolution up to **16 384 px** per side, ratio-locked or free, with 1×/2×/4×/16K chips
+- Any output resolution up to **16 384 px** per side, ratio-locked or free, with 1×/2×/4× chips plus a Custom exact-px mode
 - Shape masks (incl. n-gon) apply to the picked region — transparent outside in PNG/WebP
 
 ### 🔷 Borders & layers
@@ -76,9 +95,9 @@
 - Bottom toolbar + bottom-sheet tool panels, pinch-to-zoom the document, two-finger pan, drag handles, safe-area aware
 
 ### 🛠️ More editing power
-- 15 filter presets + 6 stackable adjustments (brightness/contrast/saturation/hue/blur/grain) that **no longer clobber each other**
+- 12 filter presets + 6 stackable adjustments (brightness/contrast/saturation/hue/blur/grain) that **no longer clobber each other**
 - **Hold-to-compare** original, remove-color (color key) with tolerance, crop with ratio presets, image masking, text with 12 fonts/spacing/line-height, stickers, draw, layers with thumbnails/visibility/lock
-- **Export**: PNG (transparent) / JPG / WebP · quality · 0.5×–4× + 16K · exact-px resize with aspect lock · shape pick · **copy-to-clipboard**
+- **Export**: PNG (transparent) / JPG / WebP · quality · 0.5×–4× + Custom (up to 16 384 px) · exact-px resize with aspect lock · shape pick · **copy-to-clipboard**
 - Drag & drop, clipboard paste (image + text), onboarding size presets (Instagram, Story, YouTube, X, Pinterest, Facebook)
 
 ### ⚡ Performance & hosting

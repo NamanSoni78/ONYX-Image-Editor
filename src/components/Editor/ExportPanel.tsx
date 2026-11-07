@@ -1,18 +1,14 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { FaDownload, FaCopy, FaLock, FaLockOpen, FaShapes, FaCropSimple } from 'react-icons/fa6';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import { useEditor, ExportShape } from './EditorContext';
+import { useEditor, ExportShape, exportPixelCaps } from './EditorContext';
 import { PickExportModal } from './PickExportModal';
 
 type Format = 'png' | 'jpeg' | 'webp';
-
-/** Browser hard limits: 16 384 px per side and ≤ 268 MP total */
-const MAX_SIDE = 16384;
-const MAX_MP = 268435456;
 
 const SHAPE_OPTIONS: { id: ExportShape; label: string; visual: React.ReactNode }[] = [
   { id: 'none', label: 'Full', visual: <span className="flex h-7 w-7 items-center justify-center rounded border-2 border-zinc-300 text-[9px] font-black">1:1</span> },
@@ -30,6 +26,10 @@ const SHAPE_OPTIONS: { id: ExportShape; label: string; visual: React.ReactNode }
 export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const { docSize, exportImage } = useEditor();
   const { toast } = useToast();
+
+  // Device-aware browser caps (iOS Safari gets a much lower area limit)
+  const { maxSide: MAX_SIDE, maxMP: MAX_MP } = useMemo(() => exportPixelCaps(), []);
+  const wInputRef = useRef<HTMLInputElement>(null);
 
   const supportsWebP = useMemo(() => {
     if (typeof document === 'undefined') return false;
@@ -55,6 +55,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
   const [shape, setShape] = useState<ExportShape>('none');
   const [polySides, setPolySides] = useState(6);
   const [pickOpen, setPickOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   /* ---------- resolve the final output size ---------- */
   const usingCustom = customW != null || customH != null;
@@ -93,18 +94,20 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
     setHDraft('');
   };
 
-  const setRatioBoth = (r: number, allowExtreme = false) => {
-    // Manual input is clamped to 32×; the 16K chip may exceed it on purpose —
-    // the pixel caps above do the real limiting.
-    const clamped = Math.min(allowExtreme ? 64 : 32, Math.max(0.1, r));
+  const setRatioBoth = (r: number) => {
+    // Manual input is clamped to 32× — the pixel caps above do the real limiting
+    // (16K-class sizes are reached through the Custom exact-px mode).
+    const clamped = Math.min(32, Math.max(0.1, r));
     setRatio(clamped);
     setRatioDraft(String(clamped));
     clearCustom();
   };
 
   const commitWDraft = () => {
-    const n = parseInt(wDraft);
-    if (wDraft !== '' && !isNaN(n) && n >= 16) {
+    // Number() + isFinite: parseInt silently mis-commits exponential input
+    // ("16e2" displays as 1600 in the field but parsed to 16)
+    const n = Math.round(Number(wDraft));
+    if (wDraft !== '' && Number.isFinite(n) && n >= 16) {
       setCustomW(n);
       if (aspectLocked) {
         const h = Math.max(16, Math.round((n * docSize.height) / docSize.width));
@@ -118,8 +121,8 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
     }
   };
   const commitHDraft = () => {
-    const n = parseInt(hDraft);
-    if (hDraft !== '' && !isNaN(n) && n >= 16) {
+    const n = Math.round(Number(hDraft));
+    if (hDraft !== '' && Number.isFinite(n) && n >= 16) {
       setCustomH(n);
       if (aspectLocked) {
         const w = Math.max(16, Math.round((n * docSize.width) / docSize.height));
@@ -143,34 +146,57 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
     }
   };
 
-  const longEdge = Math.max(docSize.width, docSize.height);
-  const k16 = MAX_SIDE / longEdge;
-  const scales: { label: string; value: number; extreme?: boolean }[] = [
+  const scales: { label: string; value: number }[] = [
     { label: '0.5×', value: 0.5 },
     { label: '1×', value: 1 },
     { label: '2×', value: 2 },
     { label: '4×', value: 4 },
-    ...(k16 > 4.05 ? [{ label: '16K', value: k16, extreme: true }] : []),
   ];
 
+  /** Custom chip: jump into exact-pixel mode seeded with the current output size */
+  const activateCustom = () => {
+    const w = Math.max(16, Math.min(MAX_SIDE, Math.round(usingCustom ? outW : docSize.width * ratio)));
+    const h = aspectLocked
+      ? Math.max(16, Math.round((w * docSize.height) / docSize.width))
+      : Math.max(16, Math.round(usingCustom ? outH : docSize.height * ratio));
+    setCustomW(w);
+    setCustomH(h);
+    setWDraft(String(w));
+    setHDraft(String(h));
+    // focus the width input so typing immediately refines it
+    requestAnimationFrame(() => wInputRef.current?.focus());
+  };
+
   const run = async (mode: 'download' | 'copy') => {
+    // Re-entrancy guard: a second click mid-render would start a CONCURRENT
+    // export whose capture/restore dance races the first one (strip mode can
+    // restore stale visibility state and leave the frame hidden) — and the
+    // z-110 modal hides the canvas overlay, so the user gets no feedback.
+    if (busy) return;
     if (mode === 'copy' && format !== 'png') {
       toast('Clipboard copy supports PNG only', 'warning');
       return;
     }
-    await exportImage({
-      format,
-      quality,
-      scale: usingCustom ? 1 : ratio,
-      targetW: usingCustom ? outW : undefined,
-      targetH: usingCustom ? outH : undefined,
-      // JPEG has no alpha — never request transparency for it
-      transparent: format === 'jpeg' ? false : transparent,
-      shape,
-      shapeSides: shape === 'polygon' ? polySides : undefined,
-      mode,
-    });
-    onClose();
+    setBusy(true);
+    try {
+      const ok = await exportImage({
+        format,
+        quality,
+        scale: usingCustom ? 1 : ratio,
+        targetW: usingCustom ? outW : undefined,
+        targetH: usingCustom ? outH : undefined,
+        // JPEG has no alpha — never request transparency for it
+        transparent: format === 'jpeg' ? false : transparent,
+        shape,
+        shapeSides: shape === 'polygon' ? polySides : undefined,
+        mode,
+      });
+      // Close only on success — a failed render keeps the modal (and the
+      // user's settings) open for a retry at a smaller resolution.
+      if (ok) onClose();
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -237,7 +263,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
             {scales.map((s) => (
               <button
                 key={s.label}
-                onClick={() => setRatioBoth(s.value, s.extreme)}
+                onClick={() => setRatioBoth(s.value)}
                 className={clsx(
                   'focus-ring flex-1 rounded-xl border py-2.5 font-mono text-xs font-bold transition-all active:scale-[0.97]',
                   !usingCustom && Math.abs(ratio - s.value) < 0.001
@@ -248,6 +274,19 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
                 {s.label}
               </button>
             ))}
+            {/* Custom replaces the old 16K chip — any exact size up to the caps */}
+            <button
+              onClick={activateCustom}
+              aria-pressed={usingCustom}
+              className={clsx(
+                'focus-ring flex-1 rounded-xl border py-2.5 text-xs font-bold transition-all active:scale-[0.97]',
+                usingCustom
+                  ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
+                  : 'border-white/10 bg-zinc-800/60 text-zinc-300 hover:border-white/20'
+              )}
+            >
+              Custom
+            </button>
           </div>
           <div className="mt-2 flex items-center gap-2">
             <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Ratio</span>
@@ -270,10 +309,10 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
           </div>
         </div>
 
-        {/* Custom size */}
-        <div>
+        {/* Custom exact-px size */}
+        <div className={clsx('rounded-xl border p-3 transition-colors', usingCustom ? 'border-indigo-400/50 bg-indigo-500/5' : 'border-transparent')}>
           <div className="mb-2 flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Resize (exact px)</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Custom size (exact px)</p>
             <button
               onClick={toggleAspectLock}
               title={aspectLocked ? 'Aspect ratio locked' : 'Aspect ratio free'}
@@ -290,6 +329,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
           </div>
           <div className="flex items-center gap-2">
             <input
+              ref={wInputRef}
               type="number"
               inputMode="numeric"
               min={16}
@@ -329,6 +369,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
               </button>
             )}
           </div>
+          <p className="mt-1.5 text-[10px] text-zinc-600">Up to {MAX_SIDE.toLocaleString()} px per side{MAX_MP < 268435456 ? ' (this device caps lower)' : ''} · 16K-class sizes included</p>
         </div>
 
         {/* Shape pick */}
@@ -422,17 +463,34 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
         <div className="flex gap-2">
           {format === 'png' && (
             <button
+              disabled={busy}
               onClick={() => void run('copy')}
-              className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-800/70 py-3.5 text-sm font-bold text-zinc-100 transition-colors hover:bg-zinc-800"
+              className={clsx(
+                'focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-800/70 py-3.5 text-sm font-bold text-zinc-100 transition-colors hover:bg-zinc-800',
+                busy && 'cursor-not-allowed opacity-50'
+              )}
             >
               <FaCopy size={13} /> Copy
             </button>
           )}
           <button
+            disabled={busy}
             onClick={() => void run('download')}
-            className="focus-ring flex flex-[2] items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]"
+            className={clsx(
+              'focus-ring flex flex-[2] items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]',
+              busy && 'cursor-not-allowed opacity-70'
+            )}
           >
-            <FaDownload size={13} /> Download
+            {busy ? (
+              <>
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                Rendering…
+              </>
+            ) : (
+              <>
+                <FaDownload size={13} /> Download
+              </>
+            )}
           </button>
         </div>
       </div>

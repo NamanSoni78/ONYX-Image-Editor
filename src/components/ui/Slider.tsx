@@ -35,7 +35,14 @@ export const Slider: React.FC<SliderProps> = ({
       <div className="mb-1.5 flex items-center justify-between">
         <button
           type="button"
-          onDoubleClick={() => defaultVal !== undefined && onChange(defaultVal)}
+          onDoubleClick={() => {
+            if (defaultVal === undefined) return;
+            onChange(defaultVal);
+            // The reset is a real value change — it MUST land in history, or the
+            // next Ctrl+Z undoes a much older action (e.g. the image IMPORT —
+            // the user's image "disappears" after adjusting + one undo).
+            onCommit?.(defaultVal);
+          }}
           title={defaultVal !== undefined ? 'Double-click to reset' : undefined}
           className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 transition-colors hover:text-zinc-200"
         >
@@ -54,7 +61,18 @@ export const Slider: React.FC<SliderProps> = ({
         aria-label={label}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         onPointerUp={() => onCommit?.(value)}
-        onKeyUp={(e) => (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && onCommit?.(value)}
+        onKeyUp={(e) => {
+          // EVERY key that can change a range input's value must commit —
+          // committing only ArrowLeft/Right left ArrowUp/Down/PageUp/PageDown/
+          // Home/End changes uncommitted, so one Ctrl+Z reverted them together
+          // with a much older action.
+          if (
+            e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+            e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Home' || e.key === 'End'
+          ) {
+            onCommit?.(value);
+          }
+        }}
         className="onyx-range w-full"
       />
     </div>

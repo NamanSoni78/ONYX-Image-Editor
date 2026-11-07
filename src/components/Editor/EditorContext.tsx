@@ -54,6 +54,41 @@ export type ExportShape =
 /** Upper bound for the border-stack builder ("n number of borders") */
 export const MAX_BORDERS = 1024;
 
+/** Browser export caps — 16 384 px per side; iOS Safari hard-fails above ~16.7 MP
+ *  total area (blank/black canvases), everyone else gets the 268 MP desktop limit. */
+export const exportPixelCaps = (): { maxSide: number; maxMP: number } => {
+  if (typeof navigator !== 'undefined') {
+    const ua = navigator.userAgent;
+    const isIOS =
+      /iP(hone|ad|od)/.test(ua) ||
+      (navigator.platform === 'MacIntel' && (navigator as any).maxTouchPoints > 1);
+    if (isIOS) return { maxSide: 8192, maxMP: 16777216 };
+  }
+  return { maxSide: 16384, maxMP: 268435456 };
+};
+
+/** Advanced (gradient / 360°) shadow — rendered as a blurred silhouette layer
+ *  attached behind the object (bakes direction, offset, spread and blur). */
+export interface ShadowFxConfig {
+  mode: 'solid' | 'gradient';
+  /** direction the shadow points: 0° = right, 90° = down (screen convention) */
+  angle: number;
+  /** px offset from the object center */
+  distance: number;
+  /** blur radius px */
+  blur: number;
+  /** px the silhouette expands beyond the object (all sides) */
+  spread: number;
+  /** 0.05–1 */
+  opacity: number;
+  /** solid mode color */
+  color: string;
+  /** gradient mode: two stops + direction (screen deg) */
+  gradA: string;
+  gradB: string;
+  gradAngle: number;
+}
+
 /** A true (destructive, rasterized) shape crop applied to any object */
 export interface CropShapeSpec {
   shape: Exclude<ExportShape, 'none'>;
@@ -91,6 +126,8 @@ export interface ExportOptions {
 export interface BorderRing {
   width: number;
   color: string;
+  /** optional per-ring gradient stroke (overrides the solid color) */
+  gradient?: { a: string; b: string; angle: number };
 }
 
 /** Configuration for the fancy multi-border feature */
@@ -174,6 +211,12 @@ export interface EditorAPI {
   /** decorative multi-border stack around the selected object */
   applyBorderStack: (cfg: BorderStackConfig) => void;
   removeBorderStack: () => void;
+  /** advanced gradient / 360° shadow (blurred silhouette behind the object) */
+  applyShadowFx: (cfg: ShadowFxConfig) => void;
+  removeShadowFx: () => void;
+  /** gradient stroke for the plain single border */
+  setObjectGradientStroke: (css: string) => void;
+  setObjectSolidStroke: (color: string) => void;
   /** numeric transform inputs from the Arrange panel */
   updateTransform: (patch: { left?: number; top?: number; scaleX?: number; scaleY?: number; angle?: number }) => void;
   toggleDraw: () => void;

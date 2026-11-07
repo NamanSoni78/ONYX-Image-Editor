@@ -3,11 +3,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { FaXmark, FaDownload, FaLock, FaLockOpen, FaCropSimple, FaShapes } from 'react-icons/fa6';
-import { useEditor, ExportShape } from './EditorContext';
+import { useEditor, ExportShape, exportPixelCaps } from './EditorContext';
 
-/** Browser hard limits: 16 384 px per side and ≤ 268 MP total */
-const MAX_SIDE = 16384;
-const MAX_MP = 268435456;
+/** Device-aware browser caps (iOS Safari gets a lower area limit) */
+const { maxSide: MAX_SIDE, maxMP: MAX_MP } = exportPixelCaps();
 const clampN = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 const SHAPES: { id: ExportShape; label: string }[] = [
@@ -105,6 +104,7 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
   }, []);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  const wInRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<{ mode: DragMode; sx: number; sy: number; box: Box; wrapW: number; wrapH: number } | null>(null);
   const boxRef = useRef(box);
   useEffect(() => {
@@ -139,26 +139,29 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
     return () => ro.disconnect();
   }, [open, docSize.width, docSize.height]);
 
-  /* ---- Escape closes ---- */
+  /* ---- Escape closes (but never mid-render — the export engine guard
+     blocks a second export, and closing would throw away the settings) ---- */
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        if (!busy) onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
+  }, [open, onClose, busy]);
 
   const dw = docSize.width;
   const dh = docSize.height;
   const region = {
     left: box.x * dw,
     top: box.y * dh,
-    width: Math.max(8, box.w * dw),
-    height: Math.max(8, box.h * dh),
+    // Min 8px, but never past the doc edge — on tiny docs the floor alone
+    // could push the capture off-document (an empty band, black in JPEG).
+    width: Math.min(Math.max(8, box.w * dw), Math.max(8, dw - box.x * dw)),
+    height: Math.min(Math.max(8, box.h * dh), Math.max(8, dh - box.y * dh)),
   };
 
   /* ---- resolve the output size (custom px or region × mult) ---- */
@@ -229,8 +232,10 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
   };
 
   const commitW = () => {
-    const n = parseInt(wDraft);
-    if (wDraft !== '' && !isNaN(n) && n >= 16) {
+    // Number() + isFinite: parseInt silently mis-commits exponential input
+    // ("16e2" displays as 1600 in the field but parsed to 16)
+    const n = Math.round(Number(wDraft));
+    if (wDraft !== '' && Number.isFinite(n) && n >= 16) {
       const h = lockRatio ? Math.max(16, Math.round((n * region.height) / region.width)) : custom?.h ?? Math.max(16, Math.round(region.height * mult));
       setCustom({ w: n, h });
       if (lockRatio) setHDraft(String(h));
@@ -239,8 +244,8 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
     }
   };
   const commitH = () => {
-    const n = parseInt(hDraft);
-    if (hDraft !== '' && !isNaN(n) && n >= 16) {
+    const n = Math.round(Number(hDraft));
+    if (hDraft !== '' && Number.isFinite(n) && n >= 16) {
       const w = lockRatio ? Math.max(16, Math.round((n * region.width) / region.height)) : custom?.w ?? Math.max(16, Math.round(region.width * mult));
       setCustom({ w, h: n });
       if (lockRatio) setWDraft(String(w));
@@ -257,12 +262,30 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
   };
 
   const k16 = MAX_SIDE / Math.max(region.width, region.height);
-  const mults: { label: string; value: number; extreme?: boolean }[] = [
+  const mults: { label: string; value: number }[] = [
     { label: '1×', value: 1 },
     { label: '2×', value: 2 },
     { label: '4×', value: 4 },
-    ...(k16 > 4.05 ? [{ label: '16K', value: k16, extreme: true }] : []),
   ];
+
+  /** Custom chip: jump into exact-px mode seeded with the region at ~4× (or 16K-class when it fits) */
+  const activateCustomPx = () => {
+    // Already custom? Keep the typed size (like ExportPanel) — re-clicking the
+    // active chip must not discard what the user entered. With the ratio lock
+    // OFF both dimensions survive; with it ON the width wins and the height
+    // follows the region aspect (mirrors commitW's fallback).
+    const seedMult = Math.min(k16, 4);
+    const w = Math.max(16, Math.min(MAX_SIDE, Math.round(custom ? custom.w : region.width * seedMult)));
+    const h = lockRatio
+      ? Math.max(16, Math.round((w * region.height) / region.width))
+      : custom
+        ? custom.h
+        : Math.max(16, Math.round(region.height * seedMult));
+    setCustom({ w, h });
+    setWDraft(String(w));
+    setHDraft(String(h));
+    requestAnimationFrame(() => wInRef.current?.focus());
+  };
 
   const run = async () => {
     if (busy) return;
@@ -454,9 +477,23 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
                   {m.label}
                 </button>
               ))}
+              {/* Custom replaces the old 16K chip — any exact size up to the caps */}
+              <button
+                onClick={activateCustomPx}
+                aria-pressed={!!custom}
+                className={clsx(
+                  'focus-ring flex-1 rounded-lg border py-2 text-[11px] font-bold transition-all active:scale-95',
+                  custom
+                    ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
+                    : 'border-white/10 bg-zinc-800/60 text-zinc-300 hover:border-white/20'
+                )}
+              >
+                Custom
+              </button>
             </div>
             <div className="mt-2 flex items-center gap-2">
               <input
+                ref={wInRef}
                 type="number"
                 inputMode="numeric"
                 min={16}
@@ -575,7 +612,7 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
             <FaDownload size={13} /> {busy ? 'Exporting…' : `Export ${outW} × ${outH}`}
           </button>
           <p className="text-center text-[10px] text-zinc-600">
-            Drag the box to move · drag a corner to resize · up to 16 384 px per side
+            Drag the box to move · drag a corner to resize · up to {MAX_SIDE.toLocaleString()} px per side
           </p>
         </div>
       </div>
