@@ -40,7 +40,7 @@ const Chip: React.FC<{
     title={title}
     onClick={onClick}
     className={clsx(
-      'focus-ring rounded-lg border px-3 py-2 text-xs font-bold transition-all active:scale-95',
+      'focus-ring flex min-h-[38px] items-center justify-center rounded-lg border px-3 py-2 text-xs font-bold transition-all active:scale-95',
       active
         ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
         : 'border-white/10 bg-zinc-800/60 text-zinc-300 hover:border-white/20 hover:bg-zinc-800',
@@ -72,11 +72,39 @@ const NumInput: React.FC<{
         defaultValue={String(Math.round(value))}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        className="focus-ring w-full rounded-md border border-white/10 bg-zinc-800/70 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-indigo-400/50"
+        className="focus-ring min-h-11 w-full rounded-md border border-white/10 bg-zinc-800/70 px-2 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-indigo-400/50"
       />
     </label>
   );
 };
+
+/** Big − / + tap button for steppers (44px touch target) */
+const StepBtn: React.FC<{
+  onClick: () => void;
+  disabled?: boolean;
+  label: string;
+}> = ({ onClick, disabled, label }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    aria-label={label}
+    className="focus-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-zinc-800/70 text-base font-bold text-zinc-200 transition-all active:scale-90 active:bg-zinc-700 disabled:opacity-30"
+  >
+    {label}
+  </button>
+);
+
+/** Always-visible action bar pinned to the bottom of the scroll area —
+ *  Apply buttons must never be buried under a long per-border list on phones.
+ *  Margins are tuned for the builder CARDS (p-3) the bars live in, so the bar
+ *  goes flush with the card edges in both the mobile sheet and the desktop
+ *  properties panel. */
+const StickyBar: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-2 border-t border-white/10 bg-[#141418]/95 px-3 pb-3 pt-2.5 shadow-[0_-10px_20px_rgba(0,0,0,0.35)] backdrop-blur">
+    {children}
+  </div>
+);
 
 /* Align icons — compact inline SVGs */
 const AlignIcon: React.FC<{ mode: string }> = ({ mode }) => {
@@ -515,6 +543,13 @@ const AdjustPanel: React.FC = () => {
     return <p className="py-6 text-center text-xs text-zinc-500">Select an object to adjust it.</p>;
   }
   const isVector = activeObj.type !== 'image';
+  const anyAdjusted = ADJUSTMENTS.some((a) => Math.abs(((editorState as any)[a.key] ?? a.zero) - a.zero) > 1e-9);
+  const resetAll = () => {
+    ADJUSTMENTS.forEach((a) => {
+      if (Math.abs(((editorState as any)[a.key] ?? a.zero) - a.zero) > 1e-9) adjustImage(a.key, a.zero);
+    });
+    commitHistory();
+  };
   return (
     <div className="space-y-4">
       {isVector && (
@@ -522,6 +557,21 @@ const AdjustPanel: React.FC = () => {
           Shapes & text are rasterized on the first adjustment — undo restores the vector original.
         </p>
       )}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Adjustments</span>
+        <button
+          onClick={resetAll}
+          disabled={!anyAdjusted}
+          className={clsx(
+            'focus-ring flex h-10 items-center gap-1.5 rounded-lg border px-3 text-[11px] font-bold transition-colors',
+            anyAdjusted
+              ? 'border-white/10 bg-zinc-800/70 text-zinc-300 hover:bg-zinc-800 hover:text-white'
+              : 'cursor-not-allowed border-white/5 bg-zinc-800/30 text-zinc-600'
+          )}
+        >
+          <FaArrowRotateLeft size={10} /> Reset all
+        </button>
+      </div>
       {ADJUSTMENTS.map((a) => (
         <Slider
           key={a.key}
@@ -544,13 +594,13 @@ const AdjustPanel: React.FC = () => {
           onPointerLeave={() => holdCompare(false)}
           onPointerCancel={() => holdCompare(false)}
           onLostPointerCapture={() => holdCompare(false)}
-          className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-800/70 py-2.5 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
+          className="focus-ring flex min-h-11 flex-1 touch-none items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-800/70 px-2 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800 active:bg-zinc-700"
         >
           <FaEyeDropper /> Hold to compare
         </button>
         <button
           onClick={startCrop}
-          className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-800/70 py-2.5 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
+          className="focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-800/70 px-2 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-800"
         >
           <FaCropSimple /> Crop
         </button>
@@ -692,9 +742,9 @@ const MaskPanel: React.FC = () => {
         <>
           <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/40 p-2.5">
             <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Polygon sides</span>
-            <button onClick={() => setSides((s) => Math.max(3, s - 1))} className="focus-ring h-7 w-7 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">−</button>
+            <button onClick={() => setSides((s) => Math.max(3, s - 1))} aria-label="Fewer sides" className="focus-ring h-9 w-9 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">−</button>
             <span className="w-7 text-center font-mono text-xs font-bold text-zinc-100">{sides}</span>
-            <button onClick={() => setSides((s) => Math.min(20, s + 1))} className="focus-ring h-7 w-7 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">+</button>
+            <button onClick={() => setSides((s) => Math.min(20, s + 1))} aria-label="More sides" className="focus-ring h-9 w-9 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">+</button>
             <span className="ml-auto text-[10px] text-zinc-600">3–20</span>
           </div>
           <div className="grid grid-cols-5 gap-2">
@@ -829,6 +879,60 @@ const DEFAULT_BORDER_CFG: BorderStackConfig = {
   gap: 4,
 };
 
+/** Preview chip for one ring — tap to select it for editing */
+const RingChip: React.FC<{
+  ring: BorderRing;
+  index: number;
+  selected: boolean;
+  onClick: () => void;
+}> = ({ ring, index, selected, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-label={`Border ${index + 1}`}
+    aria-pressed={selected}
+    className={clsx(
+      'flex h-[54px] w-11 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 transition-all active:scale-90',
+      selected ? 'border-indigo-400 bg-indigo-500/15' : 'border-white/10 bg-zinc-800/40'
+    )}
+  >
+    <span
+      className="h-6 w-6 rounded-md border border-black/30"
+      style={
+        ring.gradient
+          ? { background: `linear-gradient(${(ring.gradient.angle + 90) % 360}deg, ${ring.gradient.a}, ${ring.gradient.b})` }
+          : { background: ring.color === 'transparent' ? 'transparent' : ring.color }
+      }
+    />
+    <span className={clsx('font-mono text-[9px] font-bold', selected ? 'text-indigo-300' : 'text-zinc-500')}>{index + 1}</span>
+  </button>
+);
+
+/** Compact icon action for the selected-ring row (move / duplicate / delete) */
+const RingAction: React.FC<{
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  title: string;
+  children: React.ReactNode;
+}> = ({ onClick, disabled, danger, title, children }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    title={title}
+    aria-label={title}
+    className={clsx(
+      'focus-ring flex h-10 w-10 items-center justify-center rounded-lg border text-sm transition-all active:scale-90 disabled:opacity-30',
+      danger
+        ? 'border-red-500/25 bg-red-500/10 text-red-400'
+        : 'border-white/10 bg-zinc-800/70 text-zinc-300 hover:border-white/20 hover:text-white'
+    )}
+  >
+    {children}
+  </button>
+);
+
 const BorderStackBuilder: React.FC = () => {
   const { activeObj, applyBorderStack, removeBorderStack } = useEditor();
   const isRingGroup = activeObj?.type === 'group' && !!(activeObj as any).onyxRing;
@@ -837,28 +941,74 @@ const BorderStackBuilder: React.FC = () => {
   // Re-seed when a DIFFERENT ring group is selected — otherwise "Update" would
   // apply the previous object's config. Plain objects keep the current tweaks.
   const [lastObj, setLastObj] = useState<fabric.Object | undefined | null>(activeObj);
+  const [open, setOpen] = useState(false);
+  /** which ring chip is being edited (per-border mode) */
+  const [sel, setSel] = useState(0);
   if (activeObj !== lastObj) {
     setLastObj(activeObj);
     if (activeObj?.type === 'group' && (activeObj as any).onyxRing) {
       setCfg({ ...(activeObj as any).onyxRingCfg });
+      setSel(0);
     }
   }
-  const [open, setOpen] = useState(false);
 
+  const maxCount = cfg.mode === 'custom' ? 64 : MAX_BORDERS;
+  const count = Math.round(cfg.count);
   const patch = (p: Partial<BorderStackConfig>) => setCfg((c) => ({ ...c, ...p }));
+
+  const DEFAULT_RING: BorderRing = { width: 6, color: '#ffffff' };
+  const getRing = (i: number): BorderRing => cfg.rings?.[i] || DEFAULT_RING;
+
   const patchRing = (i: number, p: Partial<BorderRing>) =>
     setCfg((c) => {
       const rings = [...(c.rings || [])];
-      while (rings.length < c.count) rings.push({ width: 6, color: '#ffffff' });
+      while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
       rings[i] = { ...rings[i], ...p };
       return { ...c, rings };
     });
+
+  const setCount = (n: number) => {
+    const v = Math.max(1, Math.min(maxCount, Math.round(n) || 1));
+    patch({ count: v });
+    setSel((s) => Math.min(s, v - 1));
+  };
+
+  /** swap ring i with its neighbour (dir −1 = inward / +1 = outward) */
+  const moveRing = (i: number, dir: -1 | 1) =>
+    setCfg((c) => {
+      const rings = [...(c.rings || [])];
+      while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
+      const j = i + dir;
+      if (j < 0 || j >= rings.length) return c;
+      [rings[i], rings[j]] = [rings[j], rings[i]];
+      return { ...c, rings };
+    });
+
+  const dupRing = (i: number) =>
+    setCfg((c) => {
+      if (c.count >= (c.mode === 'custom' ? 64 : MAX_BORDERS)) return c;
+      const rings = [...(c.rings || [])];
+      while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
+      rings.splice(i + 1, 0, { ...rings[i] });
+      return { ...c, rings, count: Math.min(c.count + 1, c.mode === 'custom' ? 64 : MAX_BORDERS) };
+    });
+
+  const delRing = (i: number) =>
+    setCfg((c) => {
+      if (c.count <= 1) return c;
+      const rings = [...(c.rings || [])];
+      while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
+      rings.splice(i, 1);
+      return { ...c, rings, count: c.count - 1 };
+    });
+
+  const ring = getRing(sel);
 
   return (
     <div className="rounded-xl border border-white/10 bg-zinc-800/40 p-3">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="focus-ring flex w-full items-center justify-between text-left"
+        className="focus-ring flex w-full items-center justify-between py-1 text-left"
       >
         <span className="flex items-center gap-2 text-xs font-bold text-zinc-200">
           <FaLayerGroup size={11} className="text-indigo-300" />
@@ -869,33 +1019,68 @@ const BorderStackBuilder: React.FC = () => {
 
       {open && (
         <div className="mt-3 space-y-4">
-          <div className="flex items-end gap-2">
-            <div className="min-w-0 flex-1">
-              <Slider
-                label="Borders"
-                value={Math.min(cfg.count, 24)}
+          {/* Border count: fat − / + steppers + drag slider */}
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                Borders <span className="normal-case text-zinc-600">· up to {maxCount}</span>
+              </span>
+              <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">{count}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StepBtn label="−" onClick={() => setCount(count - 1)} disabled={count <= 1} />
+              <input
+                type="range"
+                className="onyx-range min-w-0 flex-1"
                 min={1}
                 max={24}
                 step={1}
-                defaultVal={3}
-                format={() => String(Math.round(cfg.count))}
-                onChange={(v) => patch({ count: Math.round(v) })}
+                value={Math.min(count, 24)}
+                aria-label="Border count"
+                onChange={(e) => setCount(Math.round(parseFloat(e.target.value)))}
               />
+              <StepBtn label="+" onClick={() => setCount(count + 1)} disabled={count >= maxCount} />
             </div>
-            <NumInput
-              label="N"
-              value={cfg.count}
-              onCommit={(v) =>
-                patch({ count: Math.max(1, Math.min(cfg.mode === 'custom' ? 64 : MAX_BORDERS, Math.round(v) || 1)) })
-              }
-            />
           </div>
-          <p className="text-[10px] text-zinc-500">
-            Up to {cfg.mode === 'custom' ? 64 : MAX_BORDERS} borders — drag the slider or type an exact count.
-          </p>
+
           <div className="flex gap-2">
-            <Chip active={cfg.mode === 'gradient'} onClick={() => patch({ mode: 'gradient' })}>Gradient ramp</Chip>
-            <Chip active={cfg.mode === 'custom'} onClick={() => patch({ mode: 'custom', count: Math.min(cfg.count, 64) })}>Per-border</Chip>
+            <Chip active={cfg.mode === 'gradient'} onClick={() => patch({ mode: 'gradient' })} className="flex-1">Gradient ramp</Chip>
+            <Chip
+              active={cfg.mode === 'custom'}
+              onClick={() => {
+                setCfg((c) => {
+                  const n = Math.max(1, Math.min(Math.round(c.count), 64));
+                  // First entry: seed per-border rings from the current gradient
+                  // ramp so the editor starts from something meaningful instead
+                  // of a wall of identical white defaults.
+                  const hasTweaks = !!c.rings?.some((r) => r.color !== '#ffffff' || r.gradient);
+                  if (hasTweaks) return { ...c, mode: 'custom', count: n };
+                  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+                  const HEX6 = /^#[0-9a-fA-F]{6}$/;
+                  const mix = (a: string, b: string, t: number) => {
+                    // guard like mixHex in CanvasEditor: "transparent" parses
+                    // to NaN and would poison every seeded ring color
+                    const sa = HEX6.test(a) ? a : '#ffffff';
+                    const sb = HEX6.test(b) ? b : '#ffffff';
+                    const pa = [1, 3, 5].map((i) => parseInt(sa.slice(i, i + 2), 16));
+                    const pb = [1, 3, 5].map((i) => parseInt(sb.slice(i, i + 2), 16));
+                    return '#' + pa.map((v, i) => Math.round(lerp(v, pb[i], t)).toString(16).padStart(2, '0')).join('');
+                  };
+                  const rings = Array.from({ length: n }, (_, i) => ({
+                    width: Math.round(lerp(c.widthMin, c.widthMax, n === 1 ? 0 : i / (n - 1))),
+                    color: mix(c.colorA, c.colorB, n === 1 ? 0 : i / (n - 1)),
+                  }));
+                  return { ...c, mode: 'custom', count: n, rings };
+                });
+                setSel((s) => Math.min(s, 63));
+                // Per-border editing is content-heavy — ask the mobile sheet for
+                // its tall snap point so the ring chips are immediately visible.
+                if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('onyx:expand-sheet'));
+              }}
+              className="flex-1"
+            >
+              Per-border
+            </Chip>
           </div>
 
           {cfg.mode === 'gradient' ? (
@@ -932,113 +1117,148 @@ const BorderStackBuilder: React.FC = () => {
               />
             </>
           ) : (
-            <div className="space-y-2">
-              <Label>Each border — solid or gradient color</Label>
-              {Array.from({ length: Math.min(Math.round(cfg.count), 64) }).map((_, i) => {
-                const ring = cfg.rings?.[i] || { width: 6, color: '#ffffff' };
-                return (
-                  <div key={i} className="flex items-center gap-1.5 rounded-lg border border-white/5 bg-zinc-800/30 px-2 py-1.5">
-                    <span className="w-4 shrink-0 text-[10px] font-bold text-zinc-500">{i + 1}</span>
-                    {ring.gradient ? (
-                      <>
-                        <input
-                          type="color"
-                          value={ring.gradient.a}
-                          onChange={(e) => patchRing(i, { gradient: { ...ring.gradient!, a: e.target.value } })}
-                          title="Gradient start"
-                          className="h-7 w-8 shrink-0 cursor-pointer rounded-md border border-white/10 bg-transparent p-0.5"
-                        />
-                        <input
-                          type="color"
-                          value={ring.gradient.b}
-                          onChange={(e) => patchRing(i, { gradient: { ...ring.gradient!, b: e.target.value } })}
-                          title="Gradient end"
-                          className="h-7 w-8 shrink-0 cursor-pointer rounded-md border border-white/10 bg-transparent p-0.5"
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          max={360}
-                          value={Math.round(ring.gradient.angle)}
-                          onChange={(e) =>
-                            patchRing(i, {
-                              gradient: { ...ring.gradient!, angle: Math.max(0, Math.min(360, parseInt(e.target.value) || 0)) },
-                            })
-                          }
-                          title="Gradient angle (deg)"
-                          className="focus-ring w-12 shrink-0 rounded-md border border-white/10 bg-zinc-800/70 px-1.5 py-1 font-mono text-[11px] text-zinc-100 outline-none focus:border-indigo-400/50"
-                        />
-                        <span className="shrink-0 text-[9px] text-zinc-600">°</span>
-                      </>
-                    ) : (
-                      <input
-                        type="color"
-                        value={ring.color}
-                        onChange={(e) => patchRing(i, { color: e.target.value })}
-                        className="h-7 w-9 shrink-0 cursor-pointer rounded-md border border-white/10 bg-transparent p-0.5"
-                      />
-                    )}
-                    <input
-                      type="number"
-                      min={1}
-                      max={60}
-                      value={Math.round(ring.width)}
-                      onChange={(e) =>
-                        // clamp BOTH ends: the engine (computeRings) silently
-                        // clamps to 1–60 — typing 400 must not show "400 px"
-                        // while rendering a 60 px ring.
-                        patchRing(i, { width: Math.max(1, Math.min(60, parseInt(e.target.value) || 1)) })
-                      }
-                      className="focus-ring w-14 shrink-0 rounded-md border border-white/10 bg-zinc-800/70 px-2 py-1 font-mono text-[11px] text-zinc-100 outline-none focus:border-indigo-400/50"
-                    />
-                    <span className="shrink-0 text-[10px] text-zinc-500">px</span>
+            <>
+              {/* Ring chips — tap a border to edit it (never scroll a 64-row list) */}
+              <div>
+                <Label>Tap a border to edit it</Label>
+                <div className="mask-fade-x flex items-stretch gap-1.5 overflow-x-auto pb-1 hide-scroll">
+                  {Array.from({ length: count }).map((_, i) => (
+                    <RingChip key={i} ring={getRing(i)} index={i} selected={i === sel} onClick={() => setSel(i)} />
+                  ))}
+                  {count < maxCount && (
                     <button
                       type="button"
-                      title={ring.gradient ? 'Switch to solid color' : 'Use a gradient color for this border'}
-                      aria-pressed={!!ring.gradient}
-                      onClick={() =>
-                        patchRing(i, {
-                          gradient: ring.gradient
-                            ? undefined
-                            : { a: '#6366f1', b: '#22d3ee', angle: 90 },
-                        })
-                      }
-                      className={clsx(
-                        'focus-ring ml-auto flex h-7 w-9 shrink-0 items-center justify-center rounded-md border text-[11px] font-bold transition-colors',
-                        ring.gradient
-                          ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
-                          : 'border-white/10 bg-zinc-800/70 text-zinc-400 hover:text-white'
-                      )}
+                      onClick={() => setCount(count + 1)}
+                      aria-label="Add another border"
+                      className="flex h-[54px] w-11 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-white/15 text-zinc-500 transition-all active:scale-90 hover:border-indigo-400/50 hover:text-indigo-300"
                     >
-                      ◑
+                      <FaPlus size={11} />
+                      <span className="text-[9px] font-bold uppercase">Add</span>
                     </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Editor for the SELECTED ring — full-size controls, one ring at a time */}
+              <div className="rounded-xl border border-white/10 bg-zinc-900/60 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-zinc-200">
+                    Border <span className="text-indigo-300">{sel + 1}</span>
+                    <span className="text-zinc-500"> / {count}</span>
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <RingAction title="Move inward" disabled={sel === 0} onClick={() => { moveRing(sel, -1); setSel(sel - 1); }}>
+                      ↑
+                    </RingAction>
+                    <RingAction title="Move outward" disabled={sel >= count - 1} onClick={() => { moveRing(sel, 1); setSel(sel + 1); }}>
+                      ↓
+                    </RingAction>
+                    <RingAction title="Duplicate this border" disabled={count >= maxCount} onClick={() => { dupRing(sel); setSel(sel + 1); }}>
+                      ⧉
+                    </RingAction>
+                    <RingAction title="Delete this border" danger disabled={count <= 1} onClick={() => { delRing(sel); setSel(Math.max(0, sel - 1)); }}>
+                      <FaTrashCan size={12} />
+                    </RingAction>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+
+                <div className="mb-3 flex gap-2">
+                  <Chip active={!ring.gradient} onClick={() => patchRing(sel, { gradient: undefined })} className="min-h-10 flex-1">Solid</Chip>
+                  <Chip
+                    active={!!ring.gradient}
+                    onClick={() => patchRing(sel, { gradient: ring.gradient || { a: '#6366f1', b: '#22d3ee', angle: 90 } })}
+                    className="min-h-10 flex-1"
+                  >
+                    Gradient
+                  </Chip>
+                </div>
+
+                {ring.gradient ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={ring.gradient.a}
+                        onChange={(e) => patchRing(sel, { gradient: { ...ring.gradient!, a: e.target.value } })}
+                        title="Gradient start"
+                        className="h-11 w-14 shrink-0 cursor-pointer rounded-lg border border-white/10 bg-transparent p-1"
+                      />
+                      <input
+                        type="color"
+                        value={ring.gradient.b}
+                        onChange={(e) => patchRing(sel, { gradient: { ...ring.gradient!, b: e.target.value } })}
+                        title="Gradient end"
+                        className="h-11 w-14 shrink-0 cursor-pointer rounded-lg border border-white/10 bg-transparent p-1"
+                      />
+                      <span className="ml-auto rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">
+                        {Math.round(ring.gradient.angle)}°
+                      </span>
+                    </div>
+                    <Slider
+                      label="Gradient angle"
+                      value={ring.gradient.angle}
+                      min={0}
+                      max={360}
+                      step={5}
+                      defaultVal={90}
+                      format={(v) => `${Math.round(v)}°`}
+                      onChange={(v) => patchRing(sel, { gradient: { ...ring.gradient!, angle: v } })}
+                    />
+                  </div>
+                ) : (
+                  <ColorPicker selected={ring.color} onChange={(c) => patchRing(sel, { color: c })} />
+                )}
+
+                {/* Thickness: slider + fat steppers */}
+                <div className="mt-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Thickness</span>
+                    <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">{Math.round(ring.width)}px</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StepBtn label="−" onClick={() => patchRing(sel, { width: Math.max(1, ring.width - 1) })} />
+                    <input
+                      type="range"
+                      className="onyx-range min-w-0 flex-1"
+                      min={1}
+                      max={60}
+                      step={1}
+                      value={ring.width}
+                      aria-label="Border thickness"
+                      onChange={(e) => patchRing(sel, { width: parseFloat(e.target.value) })}
+                    />
+                    <StepBtn label="+" onClick={() => patchRing(sel, { width: Math.min(60, ring.width + 1) })} />
+                  </div>
+                </div>
+              </div>
+            </>
           )}
 
           <Slider label="Gap between borders" value={cfg.gap} min={0} max={24} step={1} defaultVal={4} format={(v) => `${Math.round(v)}px`} onChange={(v) => patch({ gap: v })} />
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => applyBorderStack(cfg)}
-              className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient py-2.5 text-xs font-bold text-white transition-transform active:scale-[0.98]"
-            >
-              <FaCheck /> {isRingGroup ? 'Update' : 'Apply'}
-            </button>
-            {isRingGroup && (
-              <button
-                onClick={removeBorderStack}
-                className="focus-ring flex items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs font-bold text-red-400 hover:bg-red-500/20"
-              >
-                <FaTrashCan /> Remove
-              </button>
-            )}
-          </div>
           <p className="text-[10px] leading-relaxed text-zinc-500">
             Borders wrap the object as one layer, following its crop shape (or native shape) — a reversible mask keeps the full frame instead. Per-border gradient colors supported. Remove anytime to edit the original.
           </p>
+
+          {/* Sticky apply — never buried under the ring list */}
+          <StickyBar>
+            <div className="flex gap-2">
+              <button
+                onClick={() => applyBorderStack(cfg)}
+                className="focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 text-xs font-bold text-white transition-transform active:scale-[0.98]"
+              >
+                <FaCheck /> {isRingGroup ? 'Update' : 'Apply'}
+              </button>
+              {isRingGroup && (
+                <button
+                  onClick={removeBorderStack}
+                  className="focus-ring flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-4 text-xs font-bold text-red-400 hover:bg-red-500/20"
+                >
+                  <FaTrashCan /> Remove
+                </button>
+              )}
+            </div>
+          </StickyBar>
         </div>
       )}
     </div>
@@ -1123,7 +1343,7 @@ const ShadowFxBuilder: React.FC = () => {
         <div className="mt-3 space-y-4">
           <div className="flex flex-wrap gap-2">
             {SHADOW_PRESETS.map((p) => (
-              <Chip key={p.name} onClick={() => patch(p.cfg)} className="px-2.5 py-1.5 text-[10px]">
+              <Chip key={p.name} onClick={() => patch(p.cfg)} className="min-h-10 px-3 text-[11px]">
                 {p.name}
               </Chip>
             ))}
@@ -1166,7 +1386,7 @@ const ShadowFxBuilder: React.FC = () => {
 
           <div>
             <Label>Direction — 360° coverage</Label>
-            <div className="mx-auto grid w-36 grid-cols-3 gap-1.5">
+            <div className="mx-auto grid w-40 grid-cols-3 gap-1.5">
               {pad.flat().map((a) =>
                 a < 0 ? (
                   <button
@@ -1175,7 +1395,7 @@ const ShadowFxBuilder: React.FC = () => {
                     title="All sides (360° glow) — distance 0"
                     aria-pressed={cfg.distance === 0}
                     className={clsx(
-                      'focus-ring flex h-10 items-center justify-center rounded-lg border text-[9px] font-bold transition-all active:scale-95',
+                      'focus-ring flex h-11 items-center justify-center rounded-lg border text-[9px] font-bold transition-all active:scale-95',
                       cfg.distance === 0
                         ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
                         : 'border-white/10 bg-zinc-800/60 text-zinc-400 hover:border-white/20'
@@ -1190,7 +1410,7 @@ const ShadowFxBuilder: React.FC = () => {
                     title={`${dirName(a)} (${a}°)`}
                     aria-pressed={nearPad(cfg.angle) && Math.abs(cfg.angle - a) < 1 && cfg.distance > 0}
                     className={clsx(
-                      'focus-ring flex h-10 items-center justify-center rounded-lg border transition-all active:scale-95',
+                      'focus-ring flex h-11 items-center justify-center rounded-lg border transition-all active:scale-95',
                       Math.abs(cfg.angle - a) < 1 && cfg.distance > 0
                         ? 'border-indigo-400/60 bg-indigo-500/20'
                         : 'border-white/10 bg-zinc-800/60 hover:border-white/20'
@@ -1200,7 +1420,7 @@ const ShadowFxBuilder: React.FC = () => {
                       className="block h-2 w-2 rounded-full bg-current"
                       style={{
                         transform: `translate(${Math.cos((a * Math.PI) / 180) * 8}px, ${Math.sin((a * Math.PI) / 180) * 8}px)`,
-                        color: Math.abs(cfg.angle - a) < 1 && cfg.distance > 0 ? undefined : undefined,
+                        color: Math.abs(cfg.angle - a) < 1 && cfg.distance > 0 ? '#a5b4fc' : undefined,
                       }}
                     />
                   </button>
@@ -1215,25 +1435,28 @@ const ShadowFxBuilder: React.FC = () => {
           <Slider label="Spread (all sides)" value={cfg.spread} min={0} max={60} step={1} defaultVal={0} format={(v) => `${Math.round(v)}px`} onChange={(v) => patch({ spread: v })} />
           <Slider label="Opacity" value={cfg.opacity} min={0.05} max={1} step={0.05} defaultVal={0.55} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch({ opacity: v })} />
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => applyShadowFx(cfg)}
-              className="focus-ring flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient py-2.5 text-xs font-bold text-white transition-transform active:scale-[0.98]"
-            >
-              <FaCheck /> {isFx ? 'Update' : 'Apply'}
-            </button>
-            {isFx && (
-              <button
-                onClick={removeShadowFx}
-                className="focus-ring flex items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs font-bold text-red-400 hover:bg-red-500/20"
-              >
-                <FaTrashCan /> Remove
-              </button>
-            )}
-          </div>
           <p className="text-[10px] leading-relaxed text-zinc-500">
             Renders the object&apos;s own silhouette (its crop shape included), recolored, blurred and thrown in any direction — or all 360° at once. Merges with border stacks into one layer. In gradient mode the gradient sweeps in the object&apos;s own space (it rotates with the object); the offset direction is screen-space.
           </p>
+
+          <StickyBar>
+            <div className="flex gap-2">
+              <button
+                onClick={() => applyShadowFx(cfg)}
+                className="focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 text-xs font-bold text-white transition-transform active:scale-[0.98]"
+              >
+                <FaCheck /> {isFx ? 'Update' : 'Apply'}
+              </button>
+              {isFx && (
+                <button
+                  onClick={removeShadowFx}
+                  className="focus-ring flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-4 text-xs font-bold text-red-400 hover:bg-red-500/20"
+                >
+                  <FaTrashCan /> Remove
+                </button>
+              )}
+            </div>
+          </StickyBar>
         </div>
       )}
     </div>
@@ -1320,7 +1543,11 @@ const GradientStrokeSection: React.FC = () => {
             defaultVal={90}
             format={(v) => `${Math.round(v)}°`}
             onChange={(v) => setAngle(v)}
-            onCommit={() => applyGrad(a, b, angle)}
+            // v, not the `angle` closure: a double-click reset fires onChange +
+            // onCommit in the SAME tick — before the next render — so the
+            // closure still holds the pre-reset angle and would write the OLD
+            // gradient to the object.
+            onCommit={(v) => applyGrad(a, b, v)}
           />
         </div>
       )}
@@ -1384,8 +1611,10 @@ const StylePanel: React.FC = () => {
             key={t.id}
             onClick={() => setSubTool(t.id)}
             className={clsx(
-              'shrink-0 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide transition-colors',
-              activeTab === t.id ? 'text-indigo-300' : 'text-zinc-500 hover:text-zinc-300'
+              'flex min-h-[38px] shrink-0 items-center rounded-lg px-3 text-[11px] font-bold uppercase tracking-wide transition-colors',
+              activeTab === t.id
+                ? 'bg-indigo-500/15 text-indigo-300'
+                : 'text-zinc-500 hover:bg-white/5 hover:text-zinc-300'
             )}
           >
             {t.label}

@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor v2.3
+# 🎨 Onyx Image Editor v2.4
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,11 +6,15 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx v2.3** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
+**Onyx v2.4** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
 🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
 
 ---
+
+## ✨ What's new in v2.4 — the phone overhaul
+
+A complete mobile-first redesign of the editing shell: peek/tall bottom sheets that keep your artwork visible and auto-refit the canvas above them, a contextual toolbar (editing tools the moment you select something, live tool-switching without closing the sheet), a rebuilt multi-border editor (ring chips, one-ring-at-a-time editing, 44px steppers, sticky Apply), 24px touch slider thumbs, 44px touch targets everywhere, safe-area support for notched phones, sticky Download bar in Export, and a pile of engine hardening (GL-load rescue, deep filter restore, sheet-race guards) ported from the aborted v2.3.1 tree.
 
 ## ✨ What's new in v2.3
 

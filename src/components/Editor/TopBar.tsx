@@ -35,14 +35,14 @@ export const TopBar: React.FC = () => {
   };
 
   return (
-    <header className="glass z-30 flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-2 sm:px-3">
+    <header className="glass safe-area-pt z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-2 sm:h-12 sm:px-3">
       {/* Left cluster */}
       <div className="flex min-w-0 items-center gap-1.5">
         {isMobile ? (
           <button
             onClick={openDashboardSidebar}
             aria-label="Menu"
-            className="focus-ring rounded-lg p-2.5 text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
+            className="focus-ring flex h-11 w-11 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
           >
             <FaBars />
           </button>
@@ -123,7 +123,7 @@ export const TopBar: React.FC = () => {
             disabled={!canUndo}
             aria-label="Undo"
             className={clsx(
-              'focus-ring rounded-lg p-2.5 transition-colors',
+              'focus-ring flex h-11 w-11 items-center justify-center rounded-lg transition-colors sm:h-auto sm:w-auto sm:p-2.5',
               canUndo ? 'text-zinc-300 hover:bg-white/10 hover:text-white' : 'cursor-not-allowed text-zinc-700'
             )}
           >
@@ -136,7 +136,7 @@ export const TopBar: React.FC = () => {
             disabled={!canRedo}
             aria-label="Redo"
             className={clsx(
-              'focus-ring rounded-lg p-2.5 transition-colors',
+              'focus-ring flex h-11 w-11 items-center justify-center rounded-lg transition-colors sm:h-auto sm:w-auto sm:p-2.5',
               canRedo ? 'text-zinc-300 hover:bg-white/10 hover:text-white' : 'cursor-not-allowed text-zinc-700'
             )}
           >
@@ -145,7 +145,7 @@ export const TopBar: React.FC = () => {
         </Tooltip>
         <button
           onClick={openExport}
-          className="focus-ring ml-1 flex items-center gap-2 rounded-full bg-brand-gradient px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-95 sm:px-4"
+          className="focus-ring ml-1 flex h-11 items-center gap-2 rounded-full bg-brand-gradient px-4 text-xs font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-95"
         >
           <FaDownload size={12} /> Export
         </button>

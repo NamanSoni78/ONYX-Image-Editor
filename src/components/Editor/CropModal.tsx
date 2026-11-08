@@ -49,18 +49,18 @@ export const CropModal: React.FC<CropModalProps> = ({ src, onCancel, onCrop }) =
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Crop image" className="fixed inset-0 z-[120] flex flex-col bg-black">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/10 px-3">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-3">
         <span className="text-xs font-black uppercase tracking-[0.14em] text-zinc-300">Crop image</span>
         <div className="flex items-center gap-2">
           <button
             onClick={onCancel}
-            className="focus-ring flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-bold text-red-400 transition-colors hover:bg-red-500/10"
+            className="focus-ring flex min-h-11 items-center gap-2 rounded-full px-4 text-xs font-bold text-red-400 transition-colors hover:bg-red-500/10"
           >
             <FaXmark size={12} /> Cancel
           </button>
           <button
             onClick={handleCrop}
-            className="focus-ring flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white"
+            className="focus-ring flex min-h-11 items-center gap-2 rounded-full bg-brand-gradient px-5 text-xs font-bold text-white"
           >
             <FaCheck size={12} /> Apply
           </button>
@@ -68,7 +68,7 @@ export const CropModal: React.FC<CropModalProps> = ({ src, onCancel, onCrop }) =
       </div>
 
       {/* Ratio presets */}
-      <div className="flex justify-center gap-1.5 border-b border-white/5 py-2">
+      <div className="mask-fade-x flex justify-center gap-1.5 overflow-x-auto border-b border-white/5 py-2 hide-scroll">
         {RATIOS.map((r) => (
           <button
             key={r.label}
@@ -77,7 +77,7 @@ export const CropModal: React.FC<CropModalProps> = ({ src, onCancel, onCrop }) =
               cropperRef.current?.cropper?.setAspectRatio(r.value);
             }}
             className={clsx(
-              'focus-ring rounded-lg px-3 py-1.5 text-[11px] font-bold transition-all active:scale-95',
+              'focus-ring flex min-h-11 shrink-0 items-center rounded-lg px-3.5 text-[11px] font-bold transition-all active:scale-95',
               (Number.isNaN(ratio) && Number.isNaN(r.value)) || ratio === r.value
                 ? 'bg-indigo-500/20 text-indigo-200'
                 : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'

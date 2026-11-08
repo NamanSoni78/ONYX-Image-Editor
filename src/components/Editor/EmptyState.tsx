@@ -18,8 +18,12 @@ export const EmptyState: React.FC = () => {
   const isDefault = docSize.width === 1080 && docSize.height === 1080;
 
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center p-4">
-      <div className="glass flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-white/10 p-6 text-center shadow-2xl shadow-black/50">
+    /* pointer-events-none on the OVERLAY only — a full-cover z-10 layer
+       would swallow every canvas pointer event, making Draw (the one creation
+       tool that paints directly on the canvas) impossible to use on an empty
+       document. The card keeps its events. */
+    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-4">
+      <div className="glass pointer-events-auto flex max-h-full w-full max-w-md flex-col items-center gap-5 overflow-y-auto rounded-2xl border border-white/10 p-6 text-center shadow-2xl shadow-black/50">
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-indigo-400/30 bg-indigo-500/10 text-2xl text-indigo-300">
           <FaRegImage />
         </div>

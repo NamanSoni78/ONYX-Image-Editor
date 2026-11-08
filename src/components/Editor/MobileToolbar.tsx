@@ -52,16 +52,25 @@ const Quick: React.FC<{
   <button
     onClick={onClick}
     aria-label={label}
-    className="flex h-11 w-[58px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-white/10 bg-zinc-800/80 text-zinc-200 transition-all active:scale-90 active:bg-zinc-700"
+    className="flex h-12 w-[60px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-white/10 bg-zinc-800/80 text-zinc-200 transition-all active:scale-90 active:bg-zinc-700"
   >
     <span className={clsx('text-sm leading-none', danger && 'text-red-400')}>{icon}</span>
     <span className={clsx('text-[8px] font-bold uppercase tracking-wide', danger ? 'text-red-400' : 'text-zinc-400')}>{label}</span>
   </button>
 );
 
+const Divider: React.FC = () => <span className="mx-1 h-9 w-px shrink-0 bg-white/10" />;
+
 /**
- * Mobile bottom toolbar: primary tools, horizontally scrollable with fade mask.
- * Selecting an object pops up a smooth transform quick-bar above the tools.
+ * Mobile bottom toolbar — CONTEXTUAL, like PicsArt/Canva:
+ *
+ *  • nothing selected  → creation tools (Add, Text, Shape, Draw, Sticker, …)
+ *  • object selected   → editing tools FIRST (Adjust, Filter, Style, Mask,
+ *                        Crop, Arrange), creation tools still reachable after
+ *  • sheet open        → Done + live tool switching without closing the sheet
+ *
+ * The sheet header (CanvasEditor's MobileSheet) owns expand/collapse; this
+ * toolbar owns the ONLY Done button, so there are never two.
  */
 export const MobileToolbar: React.FC = () => {
   const {
@@ -71,10 +80,14 @@ export const MobileToolbar: React.FC = () => {
 
   const isText = activeObj?.type === 'i-text' || activeObj?.type === 'text';
   const hasObj = !!activeObj;
-  const sheetOpen = menu !== 'HOME' && menu !== 'EXPORT' && menu !== 'LAYERS';
+  // must mirror CanvasEditor's sheetOpen exactly — every menu that opens the
+  // mobile sheet needs a Done affordance here (the sheet header has none)
+  const sheetOpen = menu !== 'HOME' && menu !== 'EXPORT';
   const m: string = menu; // widen for TS-friendly comparisons below
 
+  /** switch to a tool panel; leaving MASK_EDIT mid-flow must clean up */
   const open = (tab: MenuTab) => {
+    if (menu === 'MASK_EDIT') finishMasking(false);
     setSubTool(null);
     setMenu(tab);
   };
@@ -83,26 +96,35 @@ export const MobileToolbar: React.FC = () => {
     // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
     if (menu === 'MASK_EDIT') finishMasking(false);
     else {
+      // Leaving the DRAW sheet must disarm the brush — or every canvas drag
+      // paints an unintended stroke after the sheet is gone.
+      if (menu === 'DRAW' && isDrawing) toggleDraw();
       setMenu('HOME');
       setSubTool(null);
     }
   };
 
+  // Fullscreen crop — close whatever sheet is open first so the user returns
+  // to a clean canvas afterwards. (MASK_EDIT implies sheetOpen.)
+  const cropNow = () => {
+    if (sheetOpen) done();
+    startCrop();
+  };
+
+  /* Editing tools that work on the current selection (switch the live sheet) */
+  const editTools = (
+    <>
+      <Btn icon={<FaSliders />} label="Adjust" onClick={() => open('ADJUST')} active={m === 'ADJUST'} />
+      <Btn icon={<FaWandMagicSparkles />} label="Filter" onClick={() => open('FILTER')} active={m === 'FILTER'} />
+      <Btn icon={<FaPalette />} label="Style" onClick={() => open('STYLE')} active={m === 'STYLE'} />
+      <Btn icon={<FaMask />} label="Mask" onClick={() => open('MASK')} active={m === 'MASK'} />
+      <Btn icon={<FaCropSimple />} label="Crop" onClick={cropNow} />
+      <Btn icon={<FaArrowDownUpAcrossLine />} label="Arrange" onClick={() => open('ARRANGE')} active={m === 'ARRANGE'} />
+    </>
+  );
+
   return (
     <div className="glass z-30 shrink-0 border-t border-white/10 safe-area-pb">
-      {/* Sheet handle row */}
-      {sheetOpen && (
-        <div className="flex items-center justify-between px-4 pb-0.5 pt-2">
-          <div className="h-1 w-10 rounded-full bg-white/20" />
-          <button
-            onClick={done}
-            className="flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-[11px] font-bold text-zinc-300"
-          >
-            <FaArrowLeft size={10} /> Done
-          </button>
-        </div>
-      )}
-
       {/* Selection quick-bar: fast transforms while an object is selected.
           Slides in with a spring — no layout jump, feels native. */}
       <AnimatePresence initial={false}>
@@ -129,9 +151,23 @@ export const MobileToolbar: React.FC = () => {
 
       <div className="mask-fade-x flex items-center gap-0.5 overflow-x-auto px-2 py-1.5 hide-scroll">
         {sheetOpen ? (
-          <Btn icon={<FaArrowLeft />} label="Done" onClick={done} active />
-        ) : (
           <>
+            <Btn icon={<FaArrowLeft />} label="Done" onClick={done} active />
+            {/* Live tool switching while the sheet is open — no close/reopen
+                round-trips. (Not during MASK_EDIT: its temp shape must not be
+                abandoned by a tool switch.) */}
+            {hasObj && m !== 'MASK_EDIT' && (
+              <>
+                <Divider />
+                {editTools}
+              </>
+            )}
+          </>
+        ) : hasObj ? (
+          <>
+            {/* Contextual editing tools FIRST — the whole point */}
+            {editTools}
+            <Divider />
             <Btn icon={<FaPlus />} label="Add" onClick={() => open('ADD')} active={m === 'ADD'} />
             <Btn
               icon={<FaFont />}
@@ -149,19 +185,25 @@ export const MobileToolbar: React.FC = () => {
             <Btn icon={<FaLayerGroup />} label="Layers" onClick={() => open('LAYERS')} active={m === 'LAYERS'} />
             <Btn icon={<FaClapperboard />} label="Doc" onClick={() => open('DOCUMENT')} active={m === 'DOCUMENT'} />
             <Btn icon={<FaPalette />} label="Bg" onClick={() => open('BG')} active={m === 'BG'} />
-
-            {/* Object tools — work on ANY object now (images, shapes, text) */}
-            {hasObj && (
-              <>
-                <span className="mx-1 h-9 w-px shrink-0 bg-white/10" />
-                <Btn icon={<FaCropSimple />} label="Crop" onClick={startCrop} />
-                <Btn icon={<FaMask />} label="Mask" onClick={() => open('MASK')} active={m === 'MASK'} />
-                <Btn icon={<FaSliders />} label="Adjust" onClick={() => open('ADJUST')} active={m === 'ADJUST'} />
-                <Btn icon={<FaWandMagicSparkles />} label="Filter" onClick={() => open('FILTER')} active={m === 'FILTER'} />
-                <Btn icon={<FaPalette />} label="Style" onClick={() => open('STYLE')} active={m === 'STYLE'} />
-                <Btn icon={<FaArrowDownUpAcrossLine />} label="Arrange" onClick={() => open('ARRANGE')} active={m === 'ARRANGE'} />
-              </>
-            )}
+          </>
+        ) : (
+          <>
+            <Btn icon={<FaPlus />} label="Add" onClick={() => open('ADD')} active={m === 'ADD'} />
+            <Btn
+              icon={<FaFont />}
+              label={isText ? 'Text' : 'Add text'}
+              onClick={() => {
+                if (isText) open('TEXT');
+                else addText();
+              }}
+              active={m === 'TEXT'}
+            />
+            <Btn icon={<FaShapes />} label="Shape" onClick={() => open('SHAPE')} active={m === 'SHAPE'} />
+            <Btn icon={<FaPen />} label="Draw" onClick={toggleDraw} active={isDrawing} />
+            <Btn icon={<FaFaceSmile />} label="Sticker" onClick={() => open('STICKER')} active={m === 'STICKER'} />
+            <Btn icon={<FaLayerGroup />} label="Layers" onClick={() => open('LAYERS')} active={m === 'LAYERS'} />
+            <Btn icon={<FaClapperboard />} label="Doc" onClick={() => open('DOCUMENT')} active={m === 'DOCUMENT'} />
+            <Btn icon={<FaPalette />} label="Bg" onClick={() => open('BG')} active={m === 'BG'} />
           </>
         )}
       </div>

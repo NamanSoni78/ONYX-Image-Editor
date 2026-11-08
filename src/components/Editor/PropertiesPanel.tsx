@@ -60,7 +60,7 @@ export const PropertiesPanel: React.FC = () => {
   return (
     <aside className="glass z-20 flex w-[300px] shrink-0 flex-col border-l border-white/10">
       {/* Tab chips (always visible — also lets users open tools without the rail) */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-white/5 px-3 py-2.5 hide-scroll">
+      <div className="mask-fade-x flex items-center gap-1 overflow-x-auto border-b border-white/5 px-3 py-2.5 hide-scroll">
         {tabs.map((t) => (
           <button
             key={t.id}

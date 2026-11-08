@@ -115,9 +115,13 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
         setHDraft(String(h));
       }
     } else {
-      // nothing valid typed → revert to “unset” (falls back to doc/aspect size)
+      // nothing valid typed → leave Custom mode ENTIRELY (both axes). Keeping
+      // only customH made usingCustom silently true with a stale derived W,
+      // and behaved differently from PickExportModal.
       setWDraft('');
       setCustomW(null);
+      setHDraft('');
+      setCustomH(null);
     }
   };
   const commitHDraft = () => {
@@ -130,6 +134,8 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
         setWDraft(String(w));
       }
     } else {
+      setWDraft('');
+      setCustomW(null);
       setHDraft('');
       setCustomH(null);
     }
@@ -459,14 +465,15 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
           {capped && ' · capped'}
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-2">
+        {/* Actions — sticky so Download is always reachable without scrolling
+            (the shape grid can push it below the fold on phones) */}
+        <div className="sticky bottom-0 z-10 -mx-5 -mb-[max(1.25rem,env(safe-area-inset-bottom))] mt-1 flex gap-2 border-t border-white/10 bg-[#141418]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-10px_20px_rgba(0,0,0,0.35)] backdrop-blur">
           {format === 'png' && (
             <button
               disabled={busy}
               onClick={() => void run('copy')}
               className={clsx(
-                'focus-ring flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-800/70 py-3.5 text-sm font-bold text-zinc-100 transition-colors hover:bg-zinc-800',
+                'focus-ring flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-800/70 py-3.5 text-sm font-bold text-zinc-100 transition-colors hover:bg-zinc-800',
                 busy && 'cursor-not-allowed opacity-50'
               )}
             >
@@ -477,7 +484,7 @@ export const ExportPanel: React.FC<{ open: boolean; onClose: () => void }> = ({ 
             disabled={busy}
             onClick={() => void run('download')}
             className={clsx(
-              'focus-ring flex flex-[2] items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]',
+              'focus-ring flex min-h-12 flex-[2] items-center justify-center gap-2 rounded-xl bg-brand-gradient py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-950/40 transition-transform active:scale-[0.98]',
               busy && 'cursor-not-allowed opacity-70'
             )}
           >

@@ -222,3 +222,24 @@ Text-edit undo granularity: fabric v5's `exitEditing` fires `modified` on the ob
 ### F4. Investigated, not bugs (round 3)
 
 Ring gradient angle default (0° vs panel's 90° seed — cosmetic only, both render); gradient-vs-shadow reference frames on rotated objects (consistent with ring gradients, documented in the panel copy); ShadowFx direction pad matrix (verified against cos/sin); custom-mode ring padding fallback; rings arrays longer than count (dropped, not leaked); WebP/JPEG quality plumbing; strip seam math at odd resolutions; `commitHistory` called with a numeric arg from onCommit (zero-param signature, harmless).
+
+### F5. Round 4 — mobile overhaul QA (v2.4)
+
+| # | Bug | Fix |
+| --- | --- | --- |
+| 117 | holdCompare(false) on a non-image selection called ensureAdjustableImage — merely OPENING Adjust with a shape/border-stack selected and switching tools rasterized (destroyed) it | non-image selections are a strict no-op in holdCompare |
+| 118 | syncFromObject's init-effect handlers captured the opening-render isMobile=false closure — desktop auto-open panels fired on phones | syncFromObjectRef routes all one-time registrations to the latest closure |
+| 119 | Rasterize/border rebuild transiently cleared the selection → menu flipped to HOME mid-slider → sheet closed under the user's finger | !obj branch guarded by borderBusyRef/rasterBusyRef (ported) |
+| 120 | GL applyFilters throw during loadFromJSON enliven → project opened EMPTY | patchGlApplyFilters wraps the GL backend: CPU retry within a 24MP budget, else unfiltered passthrough (ported) |
+| 121 | Undo/redo + project reload only ran the guarded filter pass on TOP-LEVEL images — ring/shadow-group cores kept stale flags / GL-blank sources | restoreFiltersDeep descends into attachment groups (ported) |
+| 122 | Closing the DRAW sheet (Done / drag / Escape) left the brush armed — every canvas drag painted a stroke | brush disarmed on all three close paths |
+| 123 | "transparent" ramp endpoints parsed to NaN → #NaNNaN ring colors (all-black rings, poisoned saved config) | HEX6 guard in mixHex + panel seeding (white fallback) |
+| 124 | GradientStroke "Direction" double-click reset committed the PRE-reset angle (closure captured before re-render) | onCommit receives the fresh value |
+| 125 | ShadowFx direction pad lost its active-direction dot highlight (both ternary branches undefined) | #a5b4fc restored |
+| 126 | EmptyState's full-cover overlay swallowed canvas pointer events — Draw could not paint on an empty document | overlay pointer-events-none, card keeps events |
+| 127 | No safe-area TOP inset: TopBar controls sat under the status bar in the installed iOS PWA | .safe-area-pt on the header |
+| 128 | .safe-area-pb overrode Tailwind pb-5 in Modal (same cascade layer) — modal content lost its 20px bottom padding | pb-[max(1.25rem,env(safe-area-inset-bottom))] |
+| 129 | ExportPanel custom-size invalid commit kept the other axis in Custom mode (stale derived W) | both axes cleared (ported) |
+| 130 | CropModal Cancel/Apply ≈28px, ratio chips ≈27px — below the round's 44px touch standard | 44px actions + chips |
+| 131 | EmptyState card clipped top+bottom on short (landscape) viewports | max-h-full + overflow-y-auto |
+| 132 | Sticky apply bars: −mx-4/−mb-5 didn't match their host paddings (builder cards p-3, Modal px-5) | bars re-margined per host; Modal padding uses max() |

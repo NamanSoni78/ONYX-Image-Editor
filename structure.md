@@ -29,7 +29,7 @@ ONYX-Image-Editor-main/
 └── src/
     ├── app/
     │   ├── layout.tsx           ← root: Geist fonts, metadata + manifest + icons, 12-family Google font link (canvas text), JsonLd, PwaRegister
-    │   ├── globals.css          ← design system: Onyx tokens, scrollbars, .glass/.checkerboard/.grid-bg/.mask-fade-x/.focus-ring, range inputs, reduced-motion
+    │   ├── globals.css (incl. .sheet-solid, .safe-area-pt, coarse-pointer slider thumbs)          ← design system: Onyx tokens, scrollbars, .glass/.checkerboard/.grid-bg/.mask-fade-x/.focus-ring, range inputs, reduced-motion
     │   ├── editor/
     │   │   └── page.tsx         ← STATIC editor page (sr-only h1 + <EditorClient/>)
     │   └── (site)/
@@ -40,15 +40,15 @@ ONYX-Image-Editor-main/
     │
     ├── components/
     │   ├── Editor/
-    │   │   ├── CanvasEditor.tsx     ← THE ENGINE (only 'use client' fabric logic): document-frame canvas, zoom/pan (wheel+pinch+space), history(50), keyboard map, paste/drag-drop, scratch mode + autosave, filter stack, export capture (shape masks / exact px / 16K caps), bg system (color/gradient/checker/image-layer), border stacks, gradient+image fills, layer index API, order ops (frame-safe), adaptive layout. Exposes everything via EditorContext
+    │   │   ├── CanvasEditor.tsx     ← THE ENGINE (only 'use client' fabric logic): document-frame canvas, zoom/pan (wheel+pinch+space), history(50), keyboard map, paste/drag-drop, scratch mode + autosave, filter stack, export capture (shape masks / exact px / 16K caps), bg system (color/gradient/checker/image-layer), border stacks, gradient+image fills, layer index API, order ops (frame-safe), adaptive layout, MobileSheet (peek/tall bottom sheet with drag-dismiss + live canvas refit above it). Exposes everything via EditorContext
     │   │   ├── EditorContext.tsx    ← EditorAPI type + provider + useEditor() (40+ members: state + actions; DocBg, ExportShape, BorderStackConfig, LayerInfo types)
     │   │   ├── constants.ts         ← FONTS, DOC_PRESETS, FILTER_PRESETS(15), ADJUSTMENTS(6), STICKERS, EditorState, SHORTCUTS(32)
-    │   │   ├── TopBar.tsx           ← logo, inline project rename, save-state pill, undo/redo, zoom%, palette btn, Export
+    │   │   ├── TopBar.tsx           ← logo, inline project rename, save-state pill, undo/redo, zoom%, palette btn, Export · mobile: h-14 + 44px targets + safe-area top (PWA status bar)
     │   │   ├── DesktopRail.tsx      ← left vertical tool rail (md+): 15 tools (incl. Document + BG), Tooltip+shortcut, contextual disable (needs image/object)
     │   │   ├── PropertiesPanel.tsx  ← right panel (md+): contextual tab chips (image/text/shape/none) + tool content + collapsible layers
-    │   │   ├── MobileToolbar.tsx    ← bottom toolbar (<md): scrollable icon row; animated selection quick-bar (Copy/Flip↕↔/±90°/Delete); object tools (Crop/Mask/Adjust/Filter) for ANY object
+    │   │   ├── MobileToolbar.tsx    ← CONTEXTUAL bottom toolbar (<md): empty → creation tools; object selected → quick-bar (Copy/Flip↕↔/±90°/Delete) + EDITING tools first (Adjust/Filter/Style/Mask/Crop/Arrange); sheet open → Done + live tool switching (MASK_EDIT guarded); single Done affordance
     │   │   ├── LayersPanel.tsx      ← LayersList (shared): Canva-style drag-to-reorder (⠿ handle + keyboard ↑/↓), thumbs, inline rename, eye, lock
-    │   │   ├── ZoomControls.tsx     ← floating −/%/+/fit cluster (bottom-right of canvas)
+    │   │   ├── ZoomControls.tsx     ← floating −/%/+/fit cluster (bottom-right of canvas; hidden while a mobile sheet is open)
     │   │   ├── EmptyState.tsx       ← onboarding overlay: dropzone + presets + ratio chips incl. 2:3 (hidden once layers exist)
     │   │   ├── ExportPanel.tsx      ← modal: PNG/JPG/WebP, quality, 0.5–4× + 16K chips + ratio input, exact-px resize (aspect lock), shape pick (9 masks), transparent PNG, copy-to-clipboard, live capped dims
     │   │   ├── ShortcutsModal.tsx   ← "?" cheat sheet from SHORTCUTS

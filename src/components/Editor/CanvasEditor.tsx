@@ -15,7 +15,6 @@ import {
 } from './constants';
 import {
   EditorProvider,
-  useEditor,
   EditorAPI,
   MenuTab,
   DocBg,
@@ -42,10 +41,10 @@ import { ShortcutsModal } from './ShortcutsModal';
 import { CommandPalette } from './CommandPalette';
 import { CropModal } from './CropModal';
 import { loadFonts } from '@/lib/fonts';
-import { renderToolPanel } from './panels/ToolPanels';
+import { renderToolPanel, PANEL_TITLES } from './panels/ToolPanels';
 import { LayersList } from './LayersPanel';
-import { motion, AnimatePresence } from 'framer-motion';
-import { FaXmark } from 'react-icons/fa6';
+import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import clsx from 'clsx';
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -136,6 +135,23 @@ const retagObjectTree = (o: any) => {
   if (Array.isArray(kids)) kids.forEach(retagObjectTree);
 };
 
+/** Post-loadFromJSON filter restoration that ALSO descends into border/shadow
+ *  attachment groups (onyxRing / onyxShadowCfg): the core image inside the
+ *  group needs its provenance flags rebuilt and the guarded applyFiltersSafe
+ *  pass just as much as a top-level one — otherwise preset flags stay stale
+ *  (presets stack after removing the border) and legacy oversized sources
+ *  keep the GL-blank bug after undo/redo/project reload. */
+const restoreFiltersDeep = (o: any) => {
+  if (!o) return;
+  if (o.type === 'image') {
+    retagFiltersFromMeta(o as fabric.Image);
+    if ((o as fabric.Image).filters?.length) applyFiltersSafe(o as fabric.Image);
+    return;
+  }
+  const kids = o.getObjects?.();
+  if (Array.isArray(kids)) kids.forEach(restoreFiltersDeep);
+};
+
 /** Parse a CSS gradient string → { colors, radial, angleDeg } (supports N stops).
  *  angleDeg is in screen space: 0° = →, +90° = ↓ (matches gradientCoords). */
 const parseCssGradient = (css: string): { colors: string[]; radial: boolean; angleDeg: number } => {
@@ -178,9 +194,14 @@ const gradientCoords = (angleDeg: number, w: number, h: number) => {
 };
 
 /** Interpolate between two hex colors (for gradient border ramps) */
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
 const mixHex = (a: string, b: string, t: number): string => {
-  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
-  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  // "transparent" (or any non-#rrggbb value) parses to NaN — every ring would
+  // silently render black. Fall back to white instead of poisoning the ramp.
+  const sa = HEX6.test(a) ? a : '#ffffff';
+  const sb = HEX6.test(b) ? b : '#ffffff';
+  const pa = [1, 3, 5].map((i) => parseInt(sa.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(sb.slice(i, i + 2), 16));
   const p = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
   return `#${p.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 };
@@ -257,6 +278,61 @@ const bindContextLossGuard = () => {
     /* ignore */
   }
 };
+
+/** A WebGL applyFilters throw during loadFromJSON's Image.fromObject →
+ *  setElement enliven path unwinds through the WHOLE enliven chain: the load
+ *  callback never fires and the project opens EMPTY (only the app-drawn frame
+ *  rect survives). Wrap the GL backend: on any throw, swap to the CPU 2D
+ *  backend for the rest of the session and re-run THIS pass there so enliven
+ *  always completes. */
+const patchGlApplyFilters = () => {
+  const GLB: any = (fabric as any).WebglFilterBackend;
+  if (!GLB?.prototype || GLB.prototype.__onyxGlPatch) return;
+  GLB.prototype.__onyxGlPatch = true;
+  const orig = GLB.prototype.applyFilters;
+  GLB.prototype.applyFilters = function (
+    this: any,
+    filters: any[],
+    source: any,
+    width: number,
+    height: number,
+    targetCanvas: HTMLCanvasElement,
+    cacheKey?: string
+  ) {
+    try {
+      return orig.call(this, filters, source, width, height, targetCanvas, cacheKey);
+    } catch {
+      // GL pipeline is now suspect for the whole session — CPU from now on
+      fallBackTo2DFilters();
+      try {
+        const backend: any = (fabric as any).filterBackend;
+        // The 2D backend allocates two w·h·4 typed arrays (getImageData +
+        // putImageData) — on a huge source that is the exact memory spike that
+        // just killed GL. Only take the CPU retry inside a safe pixel budget;
+        // above it go straight to the passthrough (unfiltered > crash).
+        const pxBudget = 24e6; // ~24 MP ≈ 96 MB per buffer
+        if (backend?.applyFilters && backend !== this && width * height <= pxBudget) {
+          return backend.applyFilters(filters, source, width, height, targetCanvas);
+        }
+      } catch {
+        /* 2D backend failed too (same memory pressure) — fall through */
+      }
+      // Last resort: pass the UNFILTERED source through. An unfiltered
+      // image always beats a project that loads empty.
+      try {
+        if (targetCanvas && source) {
+          targetCanvas.width = width;
+          targetCanvas.height = height;
+          targetCanvas.getContext('2d')?.drawImage(source, 0, 0, width, height);
+        }
+      } catch {
+        /* ignore */
+      }
+      return targetCanvas;
+    }
+  };
+};
+patchGlApplyFilters();
 
 /** Downscale an image's source once so filtering never exceeds the GPU texture
  *  cap. Visual size is preserved (width × scaleX stays constant). */
@@ -1271,6 +1347,12 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const [dragOver, setDragOver] = useState(false);
   /** Full-viewport "Rendering…" overlay while a (possibly huge) export runs */
   const [exportBusy, setExportBusy] = useState<string | null>(null);
+  /* ---------- mobile sheet (peek/tall + live canvas refit) ---------- */
+  /** snap point of the mobile tool sheet */
+  const [sheetMode, setSheetMode] = useState<'peek' | 'tall'>('peek');
+  /** live pixel height of the mobile sheet — the canvas viewport pads by this
+   *  so the document always stays fully visible above the sheet */
+  const [sheetInset, setSheetInset] = useState(0);
 
   /* ---------- tiny wrappers ---------- */
   const setMenu = useCallback((m: MenuTab) => setMenuState(m), []);
@@ -1470,14 +1552,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         // fabric's fromObject/setElement runs a RAW applyFilters for images with
         // filters — sources over the GPU texture cap blank out (the v2.2
         // brightness-invisibility bug surviving on the load path). Re-run the
-        // guarded pass over every filtered image — and restore the filter
-        // provenance flags from serialized meta FIRST (see syncFilterMeta).
-        c.getObjects().forEach((o) => {
-          if (o.type === 'image') {
-            retagFiltersFromMeta(o as fabric.Image);
-            if ((o as fabric.Image).filters?.length) applyFiltersSafe(o as fabric.Image);
-          }
-        });
+        // guarded pass over every filtered image (incl. images nested inside
+        // border/shadow groups) — restoring the filter provenance flags from
+        // serialized meta FIRST (see syncFilterMeta).
+        c.getObjects().forEach(restoreFiltersDeep);
         c.renderAll();
         updateLayersNow();
         isLockedRef.current = false;
@@ -1802,9 +1880,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         }
       }
       if (!obj) {
-        setActiveObj(null);
-        activeObjRef.current = null;
-        setMenuState((m) => (OBJECT_TABS.includes(m) ? 'HOME' : m));
+        // A border/shadow rebuild transiently clears the selection (unwrap +
+        // re-group): flipping to HOME there would close the mobile sheet and
+        // blank the desktop panel mid-Apply. The rebuild re-selects its fresh
+        // group when done — only honor a REAL user deselect when idle.
+        if (!borderBusyRef.current && !rasterBusyRef.current) {
+          setActiveObj(null);
+          activeObjRef.current = null;
+          setMenuState((m) => (OBJECT_TABS.includes(m) ? 'HOME' : m));
+        }
         return;
       }
       setActiveObj(obj);
@@ -1890,19 +1974,29 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 
       // Desktop: auto-open the most relevant panel when idle on HOME
       if (!isMobile) {
+        let opened: MenuTab | null = null;
         setMenuState((m) => {
           if (m !== 'HOME') return m;
-          if (obj.type === 'image') return 'ADJUST';
-          if (obj.type === 'i-text' || obj.type === 'text') return 'TEXT';
-          return 'STYLE';
+          opened = obj.type === 'image' ? 'ADJUST' : obj.type === 'i-text' || obj.type === 'text' ? 'TEXT' : 'STYLE';
+          return opened;
         });
+        // Auto-opening for a freshly selected object: land on the panel's
+        // DEFAULT tab, not whatever STYLE sub-tab (Multi-border…) the previous
+        // editing session left behind.
+        if (opened === 'STYLE') setSubTool(null);
       }
     },
     [isMobile]
   );
 
-  /* ---------------------------------------------------------------- */
-  /* INIT EFFECT                                                       */
+  /* The init effect registers canvas handlers ONCE — it would forever hold
+     the FIRST syncFromObject closure (isMobile = false on the opening render)
+     and auto-open desktop panels on phones. Route through a ref so the
+     handlers always call the latest closure. */
+  const syncFromObjectRef = useRef(syncFromObject);
+  useEffect(() => {
+    syncFromObjectRef.current = syncFromObject;
+  }, [syncFromObject]);
   /* ---------------------------------------------------------------- */
   useEffect(() => {
     if (!containerRef.current || canvasRef.current) return;
@@ -2088,8 +2182,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       if (badgeRef.current) badgeRef.current.style.opacity = '0';
       c.requestRenderAll();
     });
-    c.on('selection:created', (e) => syncFromObject(e.selected?.[0]));
-    c.on('selection:updated', (e) => syncFromObject(e.selected?.[0]));
+    c.on('selection:created', (e) => syncFromObjectRef.current(e.selected?.[0]));
+    c.on('selection:updated', (e) => syncFromObjectRef.current(e.selected?.[0]));
     c.on('selection:cleared', () => {
       // Selection is discarded programmatically during export/thumbnail capture
       // and restored right after — don't wipe the UI state in that window.
@@ -2103,7 +2197,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           maskTargetRef.current = null;
         }
       }
-      syncFromObject(undefined);
+      syncFromObjectRef.current(undefined);
     });
 
     /* ----- load project or start fresh ----- */
@@ -2181,13 +2275,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           c.renderAll();
           updateLayersNow();
           // guarded filter pass for legacy / oversized sources (see restoreEntry)
-          // + restore filter provenance flags from serialized meta
-          c.getObjects().forEach((o) => {
-            if (o.type === 'image') {
-              retagFiltersFromMeta(o as fabric.Image);
-              if ((o as fabric.Image).filters?.length) applyFiltersSafe(o as fabric.Image);
-            }
-          });
+          // + restore filter provenance flags from serialized meta — nested
+          // attachment-group images included
+          c.getObjects().forEach(restoreFiltersDeep);
           c.renderAll();
           isLockedRef.current = false;
           saveHistory();
@@ -2209,13 +2299,18 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const ro = new ResizeObserver(() => {
       if (wrapperRef.current && canvasRef.current) {
+        // On phones the tool sheet overlays the bottom of the viewport — the
+        // wrapper carries a paddingBottom equal to the sheet height so the
+        // document re-fits into the space ABOVE it. offsetHeight includes the
+        // padding, so subtract it to get the true drawable height.
+        const pb = parseFloat(getComputedStyle(wrapperRef.current).paddingBottom) || 0;
         canvasRef.current.setDimensions({
           width: wrapperRef.current.offsetWidth,
-          height: wrapperRef.current.offsetHeight,
+          height: Math.max(160, wrapperRef.current.offsetHeight - pb),
         });
         canvasRef.current.requestRenderAll();
-        // After a real viewport change (rotation, keyboard), re-fit the
-        // document so it never ends up panned out of view. Debounced.
+        // After a real viewport change (rotation, keyboard, sheet open), re-fit
+        // the document so it never ends up panned out of view. Debounced.
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => zoomFitFn(), 220);
       }
@@ -2480,8 +2575,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         return;
       }
       if (e.key === 'Escape') {
-        if (menu !== 'HOME') setMenuState('HOME');
-        else c.discardActiveObject();
+        if (menu !== 'HOME') {
+          // Leaving the DRAW sheet must disarm the brush — or every canvas
+          // drag paints an unintended stroke after the sheet is gone.
+          if (menu === 'DRAW' && (c as any).isDrawingMode) {
+            (c as any).isDrawingMode = false;
+            setIsDrawing(false);
+          }
+          setMenuState('HOME');
+        } else c.discardActiveObject();
         c.requestRenderAll();
         return;
       }
@@ -2642,7 +2744,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         // on the pre-rasterize state. The commit after the replay below records
         // the real end state (identical consecutive states are collapsed).
         scheduleSaveRef.current();
-        if (keepSelection) syncFromObject(img);
+        if (keepSelection) syncFromObjectRef.current(img);
         const pending = pendingAdjustRef.current;
         pendingAdjustRef.current = null;
         // Replay ONLY when the rasterized image is (still) the selection: the
@@ -2928,8 +3030,14 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const obj = getActive();
       if (!obj) return;
       if (obj.type !== 'image') {
-        if ((obj as any).type === 'activeSelection') return;
-        ensureAdjustableImage(() => holdCompare(hold));
+        // Vectors / groups have no filters to compare yet (they rasterize on
+        // the FIRST adjustment, after which they are images). The old code
+        // called ensureAdjustableImage() here — which RASTERIZED the object —
+        // even for a no-stash RELEASE. The AdjustPanel fires holdCompare(false)
+        // on unmount, so simply SWITCHING TOOLS away from Adjust destroyed
+        // shapes and border-stack groups. A release with nothing stashed must
+        // be a strict no-op; holding compare on a not-yet-adjusted vector is
+        // equally meaningless — return in both cases.
         return;
       }
       const img = obj as fabric.Image;
@@ -2951,7 +3059,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
       canvasRef.current?.requestRenderAll();
     },
-    [getActive, ensureAdjustableImage]
+    [getActive, applyFiltersSafe]
   );
 
   /* object ops */
@@ -3057,6 +3165,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           : new fabric.Triangle({ width: base, height: base, ...opts });
     c.add(s);
     c.setActiveObject(s);
+    setSubTool(null); // fresh object → default STYLE tab, not a stale Multi-border/Shadow tab
     setMenuState('STYLE');
   }, []);
 
@@ -3094,6 +3203,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     } as any);
     c.add(p);
     c.setActiveObject(p);
+    setSubTool(null); // fresh object → default STYLE tab
     setMenuState('STYLE');
   }, []);
 
@@ -3593,6 +3703,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     });
     c.add(rect);
     c.setActiveObject(rect);
+    setSubTool(null); // fresh object → default STYLE tab
     setMenuState('STYLE');
   }, []);
 
@@ -3614,6 +3725,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     });
     c.add(rect);
     c.setActiveObject(rect);
+    setSubTool(null); // fresh object → default STYLE tab
     setMenuState('STYLE');
   }, []);
 
@@ -4087,7 +4199,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         updateLayersNow();
         saveHistory();
         scheduleSaveRef.current();
-        if (keepSelection) syncFromObject(img);
+        if (keepSelection) syncFromObjectRef.current(img);
         toast(`Cropped to ${spec.shape}${spec.shape === 'polygon' ? ` (${clamp(spec.sides || 6, 3, 20)} sides)` : ''}`, 'success');
       });
     },
@@ -4420,6 +4532,31 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   /* ---------------------------------------------------------------- */
   const sheetOpen = isMobile && menu !== 'HOME' && menu !== 'EXPORT';
 
+  // Fresh tool → start at the peek snap point (predictable, canvas stays big)
+  const [prevMenuForSheet, setPrevMenuForSheet] = useState(menu);
+  if (menu !== prevMenuForSheet) {
+    setPrevMenuForSheet(menu);
+    setSheetMode('peek');
+  }
+
+  // Leaving MASK_EDIT mid-flow must clean up the temp shape + unlock the
+  // target image — shared by the sheet header close + the toolbar Done.
+  const closeSheet = useCallback(() => {
+    if (menu === 'MASK_EDIT') finishMasking(false);
+    else {
+      // Disarm the brush when the DRAW sheet closes — otherwise every canvas
+      // drag after Done paints an unintended stroke (the Stop button left
+      // the screen together with the sheet).
+      const c = canvasRef.current as any;
+      if (menu === 'DRAW' && c?.isDrawingMode) {
+        c.isDrawingMode = false;
+        setIsDrawing(false);
+      }
+      setMenu('HOME');
+      setSubTool(null);
+    }
+  }, [menu, finishMasking, setMenu, setSubTool]);
+
   return (
     <EditorProvider api={api}>
       <div className={`relative flex h-[100dvh] w-full flex-col overflow-hidden bg-onyx-950 font-sans text-zinc-100 ${className}`}>
@@ -4435,11 +4572,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         <div className="relative flex min-h-0 flex-1">
           {!isMobile && <DesktopRail />}
 
-          {/* Canvas viewport */}
+          {/* Canvas viewport. On phones the bottom sheet reserves space via
+              paddingBottom — the ResizeObserver refits the doc above it. */}
           <div
             ref={wrapperRef}
-            className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#0c0c0f]"
-            style={{ touchAction: 'none' }}
+            className={clsx(
+              'relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#0c0c0f]',
+              isMobile && 'transition-[padding-bottom] duration-200 ease-out'
+            )}
+            style={{ touchAction: 'none', paddingBottom: isMobile ? sheetInset : 0 }}
             onDragOver={(e) => {
               e.preventDefault();
               setDragOver(true);
@@ -4482,14 +4623,24 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 
             <EmptyState />
 
-            <ZoomControls />
+            {/* Zoom cluster hides while a tool sheet is open on phones — it
+                would float behind the sheet and just add noise. */}
+            {!(isMobile && sheetOpen) && <ZoomControls />}
 
-            {/* Mobile bottom sheet for the active tool */}
+            {/* Mobile bottom sheet for the active tool — draggable, two snap
+                points (peek / tall), opaque, and the canvas refits above it. */}
             <AnimatePresence>
               {sheetOpen && (
-                <div key="mobile-sheet" className="absolute inset-x-0 bottom-0 z-30 md:hidden">
-                  <Sheet showHandle={menu === 'LAYERS'}>{menu === 'LAYERS' ? <LayersList /> : renderToolPanel(menu)}</Sheet>
-                </div>
+                <MobileSheet
+                  key="mobile-sheet"
+                  title={menu === 'LAYERS' ? 'Layers' : PANEL_TITLES[menu] || 'Tool'}
+                  mode={sheetMode}
+                  onModeChange={setSheetMode}
+                  onClose={closeSheet}
+                  onHeight={setSheetInset}
+                >
+                  {menu === 'LAYERS' ? <LayersList /> : renderToolPanel(menu)}
+                </MobileSheet>
               )}
             </AnimatePresence>
           </div>
@@ -4515,43 +4666,113 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Mobile bottom sheet wrapper                                         */
+/* Mobile bottom sheet — peek/tall snap points, header drag, live
+   height reporting so the canvas refits above it.                      */
 /* ------------------------------------------------------------------ */
 
-const Sheet: React.FC<{ children: React.ReactNode; showHandle?: boolean }> = ({ children, showHandle }) => {
-  const { menu, setMenu, setSubTool, finishMasking } = useEditor();
+const MobileSheet: React.FC<{
+  title: string;
+  mode: 'peek' | 'tall';
+  onModeChange: (m: 'peek' | 'tall') => void;
+  onClose: () => void;
+  onHeight: (px: number) => void;
+  children: React.ReactNode;
+}> = ({ title, mode, onModeChange, onClose, onHeight, children }) => {
+  const controls = useDragControls();
+  const sheetRef = useRef<HTMLDivElement>(null);
+  // A drag that moved the sheet must NOT also fire the header's click toggle
+  const draggedRef = useRef(false);
+
+  // Report the live sheet height so the canvas viewport can pad + refit.
+  // Cleanup releases the padding when the sheet unmounts (incl. exit anim).
+  useEffect(() => {
+    const el = sheetRef.current;
+    if (!el) return;
+    onHeight(el.offsetHeight);
+    const ro = new ResizeObserver(() => onHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      onHeight(0);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Panels with heavy content (e.g. the per-border editor) request the tall
+  // snap point via a window event — keeps renderToolPanel decoupled from the
+  // sheet implementation.
+  useEffect(() => {
+    const onExpand = () => onModeChange('tall');
+    window.addEventListener('onyx:expand-sheet', onExpand);
+    return () => window.removeEventListener('onyx:expand-sheet', onExpand);
+  }, [onModeChange]);
+
   return (
     <motion.div
+      ref={sheetRef}
       initial={{ y: '100%' }}
       animate={{ y: 0 }}
       exit={{ y: '100%' }}
-      transition={{ type: 'spring', damping: 32, stiffness: 360 }}
-      className="glass max-h-[46dvh] overflow-hidden rounded-t-2xl border-t border-white/10 shadow-2xl shadow-black/60"
+      transition={{ type: 'spring', damping: 34, stiffness: 380 }}
+      drag="y"
+      dragListener={false}
+      dragControls={controls}
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={{ top: 0.2, bottom: 0.55 }}
+      dragMomentum={false}
+      onDragStart={() => {
+        draggedRef.current = true;
+      }}
+      onDragEnd={(_, info) => {
+        // Flick down / far down → dismiss; short up → tall; short down → peek.
+        // Otherwise the elastic constraint springs it back to y=0.
+        if (info.offset.y > 110 || info.velocity.y > 700) onClose();
+        else if (info.offset.y < -45) onModeChange('tall');
+        else if (info.offset.y > 45) onModeChange('peek');
+        // allow the next clean tap to toggle again
+        requestAnimationFrame(() => {
+          draggedRef.current = false;
+        });
+      }}
+      className="sheet-solid absolute inset-x-0 bottom-0 z-30 overflow-hidden rounded-t-2xl border-t border-white/10 shadow-2xl shadow-black/70"
     >
-      {/* Only the LAYERS sheet needs its own handle/close — for tool sheets the
-          MobileToolbar owns the handle row + Done button (single close affordance). */}
-      {showHandle ? (
-        <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
-          <div className="h-1 w-10 rounded-full bg-white/20" />
-          <button
-            onClick={() => {
-              // Leaving MASK_EDIT must clean up the temp shape + unlock the target image
-              if (menu === 'MASK_EDIT') finishMasking(false);
-              else {
-                setMenu('HOME');
-                setSubTool(null);
-              }
-            }}
-            aria-label="Close panel"
-            className="rounded-full p-1.5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            <FaXmark size={14} />
-          </button>
-        </div>
-      ) : (
-        <div className="h-1.5" aria-hidden />
-      )}
-      <div className="max-h-[40dvh] overflow-y-auto px-4 pb-5 safe-area-pb">{children}</div>
+      {/* Header: grabber + panel title + expand chevron. Tap toggles peek /
+          tall, drag down dismisses — the only close affordance lives in the
+          toolbar so there are never two "Done" buttons on screen. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`${title} panel — tap to ${mode === 'peek' ? 'expand' : 'collapse'}`}
+        onPointerDown={(e) => controls.start(e)}
+        onClick={() => {
+          if (draggedRef.current) return;
+          onModeChange(mode === 'peek' ? 'tall' : 'peek');
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') onModeChange(mode === 'peek' ? 'tall' : 'peek');
+        }}
+        className="relative flex cursor-grab touch-none select-none items-center gap-2 px-4 pb-2 pt-3 active:cursor-grabbing"
+      >
+        <div className="absolute left-1/2 top-1.5 h-1 w-10 -translate-x-1/2 rounded-full bg-white/20" aria-hidden />
+        <h3 className="min-w-0 flex-1 truncate text-xs font-black uppercase tracking-[0.14em] text-zinc-300">{title}</h3>
+        <span
+          className={clsx(
+            'flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800/80 text-[9px] text-zinc-400 transition-transform duration-200',
+            mode === 'tall' && 'rotate-180'
+          )}
+          aria-hidden
+        >
+          ▲
+        </span>
+      </div>
+      <div
+        className={clsx(
+          'max-h-[30dvh] overflow-y-auto overscroll-contain px-4 pb-5 transition-[max-height] duration-200 ease-out',
+          mode === 'tall' && 'max-h-[62dvh]'
+        )}
+      >
+        {children}
+      </div>
     </motion.div>
   );
 };

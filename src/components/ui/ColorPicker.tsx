@@ -10,9 +10,9 @@ const COLORS = ['#ffffff', '#000000', '#ef4444', '#f97316', '#eab308', '#22c55e'
 
 export const ColorPicker: React.FC<ColorPickerProps> = ({ selected, onChange }) => {
   return (
-    <div className="flex gap-2 overflow-x-auto py-2 hide-scroll" role="group" aria-label="Color picker">
+    <div className="mask-fade-x flex gap-2 overflow-x-auto py-2 hide-scroll" role="group" aria-label="Color picker">
       {/* Custom Color Picker */}
-      <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-full border border-white/20">
+      <div className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded-full border border-white/20 sm:h-8 sm:w-8">
         <input
           type="color"
           aria-label="Custom color"
@@ -29,17 +29,25 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ selected, onChange }) 
         type="button"
         onClick={() => onChange('transparent')}
         aria-label="Transparent"
-        className="h-8 w-8 flex-shrink-0 cursor-pointer rounded-full border border-white/20 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')]"
+        className="h-10 w-10 flex-shrink-0 cursor-pointer rounded-full border border-white/20 sm:h-8 sm:w-8"
+        style={{
+          backgroundImage:
+            "url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAIklEQVQIW2NkQAKrVq36zwjjgzhhYWGMYAEYB8RmROaABADeOQ8CXl/xfgAAAABJRU5ErkJggg==')",
+        }}
       />
 
-      {/* Presets */}
+      {/* Presets — 40px on touch, 32 on pointer devices */}
       {COLORS.map((c) => (
         <button
           type="button"
           key={c}
           onClick={() => onChange(c)}
           aria-label={`Color ${c}`}
-          className={`h-8 w-8 flex-shrink-0 cursor-pointer rounded-full border-2 transition-all ${selected === c ? 'scale-110 border-blue-500' : 'border-transparent hover:border-white/30'}`}
+          className={`h-10 w-10 flex-shrink-0 cursor-pointer rounded-full border-2 transition-all sm:h-8 sm:w-8 ${
+            selected === c
+              ? 'scale-110 border-indigo-400 ring-2 ring-indigo-400/30'
+              : 'border-transparent hover:border-white/30'
+          }`}
           style={{ backgroundColor: c }}
         />
       ))}
