@@ -5,7 +5,7 @@
  * - Stale-while-revalidate for fonts
  * - Network-first with cache fallback for pages (offline editing)
  */
-const VERSION = 'onyx-v2.4.0';
+const VERSION = 'onyx-v2.5.0';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const FONT_CACHE = `${VERSION}-fonts`;

@@ -323,8 +323,9 @@ export const PickExportModal: React.FC<{ open: boolean; onClose: () => void }> =
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Pick and export region" className="fixed inset-0 z-[120] flex flex-col bg-[#0a0a0d]">
-      {/* header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/10 px-3">
+      {/* header — pt safe-area: fullscreen overlays sit under the status bar
+          on notched phones in the installed PWA */}
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/10 px-3 pt-[env(safe-area-inset-top)]">
         <span className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-zinc-300">
           <FaCropSimple size={12} className="text-indigo-400" /> Pick &amp; export region
         </span>

@@ -54,7 +54,7 @@ export const CommandPalette: React.FC<{ open: boolean; onClose: () => void }> = 
       { id: 'draw', label: 'Toggle draw mode', icon: <FaPen size={13} />, run: editor.toggleDraw },
       { id: 'adjust', label: 'Open adjustments', icon: <FaSliders size={13} />, run: () => editor.setMenu('ADJUST') },
       { id: 'filters', label: 'Open filters', icon: <FaWandMagicSparkles size={13} />, run: () => editor.setMenu('FILTER') },
-      { id: 'crop', label: 'Crop image', icon: <FaCropSimple size={13} />, run: editor.startCrop },
+      { id: 'crop', label: 'Crop image — rectangle + shapes', icon: <FaCropSimple size={13} />, run: editor.startCrop },
       { id: 'layers', label: 'Open layers', icon: <FaLayerGroup size={13} />, run: () => editor.setMenu('LAYERS') },
       { id: 'document', label: 'Document settings', hint: 'Canvas size', icon: <FaPlus size={13} />, run: () => editor.setMenu('DOCUMENT') },
       { id: 'background', label: 'Canvas background', icon: <FaPlus size={13} />, run: () => editor.setMenu('BG') },

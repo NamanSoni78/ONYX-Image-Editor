@@ -211,3 +211,49 @@ Phone-first redesign of the whole editing shell — the multi-border feature (an
 - **Touch ergonomics**: 24px slider thumbs + 6px track on coarse pointers, 38–44px chips/buttons/steppers everywhere, bigger ColorPicker swatches (40px) with fade-mask hint, StylePanel tab strip as tappable chips, CropModal 44px actions, TopBar 44px targets + h-14 mobile header + safe-area top inset (PWA status bar), EmptyState overlay no longer eats canvas pointer events (Draw works on an empty doc) and its card scrolls on short viewports, Export modal sticky Download bar.
 - **Engine hardening ported from the aborted v2.3.1 tree**: patchGlApplyFilters (GL throw during loadFromJSON no longer opens projects empty), restoreFiltersDeep (nested ring/shadow-group images get the guarded filter pass after undo/redo/reload), border/raster busy-guard in syncFromObject (mid-Apply selection transients no longer close the sheet / blank the panel), DRAW disarm on every sheet-close path, ExportPanel custom-size invalid-commit clears BOTH axes, Slider ↺ reset button, AdjustPanel Reset-all, setSubTool reset on fresh objects + STYLE auto-open.
 - **New bug fixes found by the 3-hunter QA round**: holdCompare(false) on a non-image selection no longer rasterizes it (switching away from Adjust destroyed shapes/border stacks — critical); syncFromObject isMobile closure fixed via ref (desktop auto-open fired on phones); transparent ramp endpoints no longer poison ring colors with NaN (both mixers guarded); GradientStroke direction reset commit uses the fresh value; shadow-pad active dot highlight restored.
+
+---
+
+# ONYX v2.5 — Worklog
+
+## Phase 20 — v2.5 round: autosave flash, border UX rebuild, mask/crop split, contour borders, radial gradients
+
+- **Autosave without the blank flash**: `doSave` now (1) runs its heavy work (JSON stringify + thumbnail capture) inside `requestIdleCallback` (timeout 600ms, setTimeout fallback) so it never blocks mid-interaction, (2) reuses the LAST history snapshot (`lastJsonRef`, invalidated on `text:changed`, kept fresh by `restoreEntry` on undo/redo) instead of re-stringifying a multi-MB canvas a second time, (3) repaints the canvas after saving (discarded-backing-store insurance). `renderDocDataURL`/`renderDocBlob` no longer discard/restore the active object around captures (fabric's `toCanvasElement` renders with `interactive=false` — controls are never in the capture; the churn fired selection events on every autosave thumbnail). Save-concurrency guards (`saveInFlightRef`/`saveAgainRef`) coalesce overlapping passes so the LAST change always lands.
+- **Border tab rebuild**: Single / Multi-border mode chips (Single = default; a multi-ring object opens straight into Multi). `border-single`/`border-multi` subTool values; syncFromObject drops stale border-_* modes when the selection changes; the Width slider keeps a local drag value so the async contour re-seeds never snap the thumb.
+- **Multi-border auto-apply**: the Apply/Update button is GONE. Every tweak debounces 350ms into `applyBorderStack(cfg, {quiet:true})`; a rebuild arriving mid-flight is QUEUED (`pendingRingRef` + target core) and flushed by `rewrapWithAttachments` when idle, with a stale-target guard (a queued cfg is dropped if the user selected a different object meanwhile). `rewrapWithAttachments` gained `{quiet}` (no toast spam on auto-applies).
+- **Sheet-closing race fixed (critical)**: `c.remove(activeGroup)` fires `selection:cleared` synchronously DURING the unwrap — before `rewrapWithAttachments` set `borderBusyRef`, so every border/shadow apply read as a user deselect and closed the mobile sheet mid-apply. `applyBorderStack`/`applyShadowFx` now OWN the busy flag through the unwrap (handedOff pattern; aborts clear it), `removeBorderStack`/`removeShadowFx` mirror it.
+- **Mask vs Crop split**: MaskPanel is mask-only (header "Mask", 5 reversible shapes, copy pointing at Crop for real cuts). The REAL shape cuts (circle/square/rounded/triangle/star/heart/hex/penta/diamond/N-gon + sides stepper) moved into the Crop screen — a one-tap shape row at the bottom of the fullscreen cropper; `onShapeCrop` closes the modal and runs `applyShapeCrop`. Rail labels, shortcut sheet and PANEL_TITLES updated.
+- **Contour borders on shape crops**: a circle-cropped (or any shape-cropped) object's plain single border now hugs the cut contour EXACTLY — `updateStyle('strokeW'/'strokeC')`, `setObjectGradientStroke` and `setObjectSolidStroke` route through `applyContourStroke` (a one-ring `custom` stack traced by `ringPathFor` along `onyxCropShape`), falling back to the plain fabric stroke for non-cropped objects. Width 0 removes the ring; the picked color is remembered on the core; `syncFromObject` seeds the Width/Color controls from a one-ring cfg; GradientStrokeSection seeds its colors/type from the ring gradient.
+- **Radial gradients**: `makeCtxGradient` gained a `type:'radial'` path (center → max(w,h)/2). Per-ring multi-border gradients (Linear/Radial chips, angle slider hidden for radial), the single gradient border (`radial-gradient(circle, a, b)` through the existing CSS parser), and gradient shadows (`gradType`) all support it. RingChip previews render radial correctly. `BorderRing.gradient`/`ShadowFxConfig` types extended; round-trips through project JSON verified.
+- README v2.5 section + SW bumped to onyx-v2.5.0.
+
+## Phase 21 — verification (all green)
+
+- `tsc --noEmit` 0 errors · `next build` 4/4 static routes clean.
+- Mobile 390×844 browser regression: circle crop → Width 10 → perfect CIRCULAR ring (pixel-verified: 16-ray scan, 0/4 corner pixels, aspect 1.000); border tab opens with Single active; Multi auto-applies count 3→5 with NO apply button and the sheet STAYS OPEN through the rebuild (the race fix); radial gradient on ring 1 round-trips through autosave + project reload (`type:'radial'` intact after reload); undo/redo restores/re-creates the ring group; autosave probe over 3s after a change: zero blank frames, selection survives, badge "Saved"; Mask sheet mask-only; Crop screen shows the full shape row; desktop rail labels correct. Zero page errors.
+
+## Phase 22 — Round 4 QA hunt (3 subagents, 20 findings) — all fixed
+
+- [A1] `lastJsonRef` autosave cache is invalidated by EVERY commit-less mutation (updateStyle, handleTextFormat) — picking a border/shadow/text color no longer risks persisting the pre-change canvas on the next debounced save.
+- [A2/A4] Contour-stroke patches arriving inside the unwrap→regroup window (the live selection briefly points at a destroyed group) now merge against `busyCoreRef`/`busyRingCfgRef` — Width re-drags and the GradientStrokeSection's width+gradient one-two punch always land (the gradient is no longer swallowed into a white ring).
+- [A3] Width→0 racing an in-flight rebuild queues a REMOVE intent (`pendingRingRemoveRef`) that the flush honors — dragging the width to 0 always ends borderless, the stale queued ring can't resurrect.
+- [A5] Removing an existing contour ring remembers its color on the core (Width 5→0→5 keeps the color).
+- [A6] `doSave`'s heavy pass re-checks `isLockedRef` after the idle wait — an undo/project-load during the window defers the save instead of persisting a torn state.
+- [B1] The builder keeps the edited RING CHIP selected across auto-apply echoes (the rebuild's new group used to reset the editor to Border 1 mid-drag).
+- [B2] A tweak still inside its 350ms debounce window is FLUSHED when the builder unmounts (switching chips/Done/objects) — "auto-applies" now always means it.
+- [B3] Border mode is sticky across ring rebuilds: syncFromObject compares CORE identity, so the rebuilt group no longer reads as a new object (no more mid-edit ejection to Single).
+- [B4] Single-mode controls on a multi-ring stack replaced by an honest info panel (Edit in Multi-border / Remove borders) — they were a placebo (group ignores strokeWidth) or destructive (contour path flattened the stack).
+- [B5] Gradient shadow presets pin `gradType: 'linear'` — a Radial left active can't silently swallow a preset's direction.
+- [B6] Re-clicking the active Style tab is a no-op (it used to discard an explicit Single/Multi choice).
+- [B7] The gradient-border toggle is DERIVED from the object's live stroke/ring — picking a solid color no longer leaves the toggle lying ON.
+- [B8] `localW` clears when the selection vanishes (no stale width leaking to the next object).
+- [C1] Tall sheet capped at `max(30dvh, min(62dvh, 100dvh-470px))` — the canvas keeps ~200-290px (was pinned to the 160px floor at zoom 0.04-0.07, editing borders blind); verified 287px @ z 0.182 on 390×844.
+- [C2/C3] Contour applies are debounced 250ms and MERGED — one ring rebuild per pause instead of one per slider tick (history + phone jank).
+- [C4] CropModal + PickExportModal headers respect the top safe-area inset (notched-phone PWAs).
+- [C5] Stray README.md.new removed.
+- [C6] Crop during MASK_EDIT is refused with a toast (used to rasterize + leak the temp mask shape).
+- [C7] Chip exposes aria-pressed for toggle chips; [C8] crop ratio row left-aligned (no first-chip clipping on ≤349px); [C9] command-palette crop label aligned.
+
+## Phase 23 — re-verification (all green)
+
+Mobile 390×844: Single chip default (aria-pressed) → plain image keeps the plain stroke · circle crop → Width 12 → contour ring group, sheet open · gradient toggle first tap lands the gradient ring at width 12 (A4) · Multi auto-apply count 1→3 · Per-border ring 3 thickness 20 → echo keeps Border 3 selected (B1) · tall-sheet canvas 287px @ zoom 0.182 (C1) · undo/redo of the ring tweak exact · zero page errors. tsc 0 errors, build 4/4 routes.

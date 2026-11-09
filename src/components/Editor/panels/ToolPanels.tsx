@@ -14,7 +14,7 @@ import {
 import { Slider } from '@/components/ui/Slider';
 import { ColorPicker } from '@/components/ui/ColorPicker';
 import { GradientPicker } from '@/components/ui/GradientPicker';
-import { useEditor, BorderStackConfig, BorderRing, CropShapeSpec, ShadowFxConfig, MAX_BORDERS } from '../EditorContext';
+import { useEditor, BorderStackConfig, BorderRing, ShadowFxConfig, MAX_BORDERS } from '../EditorContext';
 import {
   ADJUSTMENTS, FILTER_PRESETS, STICKERS, FONTS, DOC_PRESETS,
 } from '../constants';
@@ -39,6 +39,8 @@ const Chip: React.FC<{
     type="button"
     title={title}
     onClick={onClick}
+    // present only for toggle chips (actions leave it off)
+    aria-pressed={active == null ? undefined : !!active}
     className={clsx(
       'focus-ring flex min-h-[38px] items-center justify-center rounded-lg border px-3 py-2 text-xs font-bold transition-all active:scale-95',
       active
@@ -686,14 +688,12 @@ const FilterPanel: React.FC = () => {
 };
 
 const MaskPanel: React.FC = () => {
-  const { activeObj, startMasking, applyShapeCrop } = useEditor();
-  const [mode, setMode] = useState<'mask' | 'crop'>('mask');
-  const [sides, setSides] = useState(6);
+  const { activeObj, startMasking } = useEditor();
   if (!activeObj) {
-    return <p className="py-6 text-center text-xs text-zinc-500">Select an object to mask or crop it.</p>;
+    return <p className="py-6 text-center text-xs text-zinc-500">Select an object to mask it.</p>;
   }
   if ((activeObj as any).type === 'activeSelection') {
-    return <p className="py-6 text-center text-xs text-zinc-500">Select a single object to mask or crop it.</p>;
+    return <p className="py-6 text-center text-xs text-zinc-500">Select a single object to mask it.</p>;
   }
   const maskShapes = [
     { key: 'rect' as const, label: 'Square', visual: <div className="h-7 w-7 rounded border-2 border-zinc-300" /> },
@@ -702,65 +702,23 @@ const MaskPanel: React.FC = () => {
     { key: 'heart' as const, label: 'Heart', visual: <span className="text-2xl">❤️</span> },
     { key: 'star' as const, label: 'Star', visual: <span className="text-2xl">⭐</span> },
   ];
-  const cropShapes: { key: CropShapeSpec['shape']; label: string; visual: React.ReactNode }[] = [
-    { key: 'circle', label: 'Circle', visual: <div className="h-7 w-7 rounded-full border-2 border-zinc-300" /> },
-    { key: 'square', label: 'Square', visual: <div className="h-7 w-7 rounded border-2 border-zinc-300" /> },
-    { key: 'rounded', label: 'Round', visual: <div className="h-7 w-7 rounded-lg border-2 border-zinc-300" /> },
-    { key: 'triangle', label: 'Triangle', visual: <div className="h-0 w-0 border-b-[26px] border-l-[14px] border-r-[14px] border-b-zinc-300 border-l-transparent border-r-transparent" /> },
-    { key: 'star', label: 'Star', visual: <span className="text-2xl">⭐</span> },
-    { key: 'heart', label: 'Heart', visual: <span className="text-2xl">❤️</span> },
-    { key: 'hexagon', label: 'Hex', visual: <span className="text-2xl">⬡</span> },
-    { key: 'pentagon', label: 'Penta', visual: <span className="text-2xl">⬠</span> },
-    { key: 'diamond', label: 'Diamond', visual: <div className="h-6 w-6 rotate-45 border-2 border-zinc-300" /> },
-    { key: 'polygon', label: `${sides}-gon`, visual: <span className="text-xs font-black text-zinc-300">{sides}</span> },
-  ];
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
-        <Chip active={mode === 'mask'} onClick={() => setMode('mask')} className="flex-1">Mask · reversible</Chip>
-        <Chip active={mode === 'crop'} onClick={() => setMode('crop')} className="flex-1">Crop · real cut</Chip>
-      </div>
       <p className="text-[10px] leading-relaxed text-zinc-500">
-        {mode === 'mask'
-          ? 'Mask clips the object to the shape — reversible. Borders keep wrapping the FULL frame (the masked-away corners stay inside the border).'
-          : 'Crop truly cuts the object into the shape — borders added after the crop follow the cropped outline exactly.'}
+        Mask clips the object to the shape — fully reversible, the original is kept. For a real cut (with borders that follow the shape exactly), use <span className="font-bold text-zinc-400">Crop</span>.
       </p>
-      {mode === 'mask' ? (
-        <div className="grid grid-cols-5 gap-2">
-          {maskShapes.map((s) => (
-            <button
-              key={s.key}
-              onClick={() => startMasking(s.key)}
-              className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
-            >
-              {s.visual}
-              <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <>
-          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/40 p-2.5">
-            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Polygon sides</span>
-            <button onClick={() => setSides((s) => Math.max(3, s - 1))} aria-label="Fewer sides" className="focus-ring h-9 w-9 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">−</button>
-            <span className="w-7 text-center font-mono text-xs font-bold text-zinc-100">{sides}</span>
-            <button onClick={() => setSides((s) => Math.min(20, s + 1))} aria-label="More sides" className="focus-ring h-9 w-9 rounded-lg border border-white/10 bg-zinc-800/70 text-sm font-bold text-zinc-200 active:scale-90">+</button>
-            <span className="ml-auto text-[10px] text-zinc-600">3–20</span>
-          </div>
-          <div className="grid grid-cols-5 gap-2">
-            {cropShapes.map((s) => (
-              <button
-                key={s.key}
-                onClick={() => applyShapeCrop({ shape: s.key, sides })}
-                className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
-              >
-                {s.visual}
-                <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+      <div className="grid grid-cols-5 gap-2">
+        {maskShapes.map((s) => (
+          <button
+            key={s.key}
+            onClick={() => startMasking(s.key)}
+            className="focus-ring flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-zinc-800/60 py-3 transition-all hover:border-white/20 hover:bg-zinc-800 active:scale-95"
+          >
+            {s.visual}
+            <span className="text-[9px] font-bold uppercase text-zinc-400">{s.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 };
@@ -900,7 +858,9 @@ const RingChip: React.FC<{
       className="h-6 w-6 rounded-md border border-black/30"
       style={
         ring.gradient
-          ? { background: `linear-gradient(${(ring.gradient.angle + 90) % 360}deg, ${ring.gradient.a}, ${ring.gradient.b})` }
+          ? ring.gradient.type === 'radial'
+            ? { background: `radial-gradient(circle, ${ring.gradient.a}, ${ring.gradient.b})` }
+            : { background: `linear-gradient(${(ring.gradient.angle + 90) % 360}deg, ${ring.gradient.a}, ${ring.gradient.b})` }
           : { background: ring.color === 'transparent' ? 'transparent' : ring.color }
       }
     />
@@ -938,34 +898,92 @@ const BorderStackBuilder: React.FC = () => {
   const isRingGroup = activeObj?.type === 'group' && !!(activeObj as any).onyxRing;
   const seed: BorderStackConfig = isRingGroup ? (activeObj as any).onyxRingCfg : DEFAULT_BORDER_CFG;
   const [cfg, setCfg] = useState<BorderStackConfig>({ ...seed });
-  // Re-seed when a DIFFERENT ring group is selected — otherwise "Update" would
-  // apply the previous object's config. Plain objects keep the current tweaks.
+  // Re-seed when a DIFFERENT ring group is selected — otherwise the tweaks
+  // would apply the previous object's config. Plain objects keep the current tweaks.
   const [lastObj, setLastObj] = useState<fabric.Object | undefined | null>(activeObj);
-  const [open, setOpen] = useState(false);
   /** which ring chip is being edited (per-border mode) */
   const [sel, setSel] = useState(0);
+  /** AUTO-APPLY guards:
+   *  - touchedRef: set on the first USER edit; opening the builder never
+   *    slaps a border on the object by itself.
+   *  - lastAppliedRef: JSON of the last applied cfg. The rebuild re-selects a
+   *    NEW group object which re-seeds cfg with identical content — comparing
+   *    against this string breaks the re-seed → apply → re-seed feedback loop. */
+  const touchedRef = useRef(false);
+  const lastAppliedRef = useRef<string>('');
+  const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** latest cfg for the unmount flush (the debounce closure would hold a stale one) */
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
   if (activeObj !== lastObj) {
+    // An auto-apply echo rebuilds the group as a NEW object with IDENTICAL
+    // cfg — keep editing the same ring chip in that case (setSel(0) here made
+    // every tweak dump the user back onto Border 1, mid-drag included).
+    const incoming: BorderStackConfig | undefined = (activeObj as any)?.onyxRingCfg;
+    const isEcho =
+      !!lastAppliedRef.current && !!incoming && JSON.stringify(incoming) === lastAppliedRef.current;
     setLastObj(activeObj);
+    touchedRef.current = false;
     if (activeObj?.type === 'group' && (activeObj as any).onyxRing) {
-      setCfg({ ...(activeObj as any).onyxRingCfg });
-      setSel(0);
+      setCfg({ ...incoming! });
+      if (isEcho) {
+        // keep sel (clamped to the new count)
+        setSel((s) => Math.min(s, Math.max(0, (incoming?.count || 1) - 1)));
+      } else {
+        setSel(0);
+      }
     }
   }
 
+  // Debounced auto-apply — every tweak lands ~350ms after the last change.
+  // The engine queues cfgs that arrive mid-rebuild, so no tick is ever lost.
+  useEffect(() => {
+    if (!touchedRef.current) return;
+    const key = JSON.stringify(cfg);
+    if (key === lastAppliedRef.current) return;
+    if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
+    applyTimerRef.current = setTimeout(() => {
+      lastAppliedRef.current = key;
+      applyBorderStack(cfg, { quiet: true });
+    }, 350);
+    return () => {
+      if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg]);
+  useEffect(
+    () => () => {
+      if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
+      // A tweak still inside its 350ms debounce window must not die with the
+      // panel (switching to Single, Done, selecting another object) — the
+      // "auto-applies" badge promises it lands.
+      if (touchedRef.current && JSON.stringify(cfgRef.current) !== lastAppliedRef.current) {
+        applyBorderStack(cfgRef.current, { quiet: true });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
   const maxCount = cfg.mode === 'custom' ? 64 : MAX_BORDERS;
   const count = Math.round(cfg.count);
-  const patch = (p: Partial<BorderStackConfig>) => setCfg((c) => ({ ...c, ...p }));
+  const patch = (p: Partial<BorderStackConfig>) => {
+    touchedRef.current = true;
+    setCfg((c) => ({ ...c, ...p }));
+  };
 
   const DEFAULT_RING: BorderRing = { width: 6, color: '#ffffff' };
   const getRing = (i: number): BorderRing => cfg.rings?.[i] || DEFAULT_RING;
 
-  const patchRing = (i: number, p: Partial<BorderRing>) =>
+  const patchRing = (i: number, p: Partial<BorderRing>) => {
+    touchedRef.current = true;
     setCfg((c) => {
       const rings = [...(c.rings || [])];
       while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
       rings[i] = { ...rings[i], ...p };
       return { ...c, rings };
     });
+  };
 
   const setCount = (n: number) => {
     const v = Math.max(1, Math.min(maxCount, Math.round(n) || 1));
@@ -974,7 +992,8 @@ const BorderStackBuilder: React.FC = () => {
   };
 
   /** swap ring i with its neighbour (dir −1 = inward / +1 = outward) */
-  const moveRing = (i: number, dir: -1 | 1) =>
+  const moveRing = (i: number, dir: -1 | 1) => {
+    touchedRef.current = true;
     setCfg((c) => {
       const rings = [...(c.rings || [])];
       while (rings.length < c.count) rings.push({ ...DEFAULT_RING });
@@ -983,8 +1002,10 @@ const BorderStackBuilder: React.FC = () => {
       [rings[i], rings[j]] = [rings[j], rings[i]];
       return { ...c, rings };
     });
+  };
 
-  const dupRing = (i: number) =>
+  const dupRing = (i: number) => {
+    touchedRef.current = true;
     setCfg((c) => {
       if (c.count >= (c.mode === 'custom' ? 64 : MAX_BORDERS)) return c;
       const rings = [...(c.rings || [])];
@@ -992,8 +1013,10 @@ const BorderStackBuilder: React.FC = () => {
       rings.splice(i + 1, 0, { ...rings[i] });
       return { ...c, rings, count: Math.min(c.count + 1, c.mode === 'custom' ? 64 : MAX_BORDERS) };
     });
+  };
 
-  const delRing = (i: number) =>
+  const delRing = (i: number) => {
+    touchedRef.current = true;
     setCfg((c) => {
       if (c.count <= 1) return c;
       const rings = [...(c.rings || [])];
@@ -1001,24 +1024,23 @@ const BorderStackBuilder: React.FC = () => {
       rings.splice(i, 1);
       return { ...c, rings, count: c.count - 1 };
     });
+  };
 
   const ring = getRing(sel);
 
   return (
     <div className="rounded-xl border border-white/10 bg-zinc-800/40 p-3">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="focus-ring flex w-full items-center justify-between py-1 text-left"
-      >
+      <div className="mb-1 flex items-center justify-between">
         <span className="flex items-center gap-2 text-xs font-bold text-zinc-200">
           <FaLayerGroup size={11} className="text-indigo-300" />
-          Border stack {isRingGroup && <span className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-[9px] font-bold text-indigo-300">editing</span>}
+          Multi-border {isRingGroup && <span className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-[9px] font-bold text-indigo-300">editing</span>}
         </span>
-        <span className="text-[10px] font-bold text-zinc-500">{open ? 'hide ▲' : 'multi-border ▼'}</span>
-      </button>
+        <span className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-400/90">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> auto-applies
+        </span>
+      </div>
 
-      {open && (
-        <div className="mt-3 space-y-4">
+      <div className="mt-2 space-y-4">
           {/* Border count: fat − / + steppers + drag slider */}
           <div>
             <div className="mb-1.5 flex items-center justify-between">
@@ -1048,6 +1070,7 @@ const BorderStackBuilder: React.FC = () => {
             <Chip
               active={cfg.mode === 'custom'}
               onClick={() => {
+                touchedRef.current = true;
                 setCfg((c) => {
                   const n = Math.max(1, Math.min(Math.round(c.count), 64));
                   // First entry: seed per-border rings from the current gradient
@@ -1165,11 +1188,20 @@ const BorderStackBuilder: React.FC = () => {
                 <div className="mb-3 flex gap-2">
                   <Chip active={!ring.gradient} onClick={() => patchRing(sel, { gradient: undefined })} className="min-h-10 flex-1">Solid</Chip>
                   <Chip
-                    active={!!ring.gradient}
-                    onClick={() => patchRing(sel, { gradient: ring.gradient || { a: '#6366f1', b: '#22d3ee', angle: 90 } })}
+                    active={!!ring.gradient && ring.gradient.type !== 'radial'}
+                    onClick={() => patchRing(sel, { gradient: ring.gradient ? { ...ring.gradient, type: 'linear' } : { a: '#6366f1', b: '#22d3ee', angle: 90, type: 'linear' } })}
                     className="min-h-10 flex-1"
+                    title="Straight-line gradient between the two colors"
                   >
-                    Gradient
+                    Linear
+                  </Chip>
+                  <Chip
+                    active={!!ring.gradient && ring.gradient.type === 'radial'}
+                    onClick={() => patchRing(sel, { gradient: ring.gradient ? { ...ring.gradient, type: 'radial' } : { a: '#6366f1', b: '#22d3ee', angle: 90, type: 'radial' } })}
+                    className="min-h-10 flex-1"
+                    title="Center-out circular gradient"
+                  >
+                    Radial
                   </Chip>
                 </div>
 
@@ -1190,20 +1222,26 @@ const BorderStackBuilder: React.FC = () => {
                         title="Gradient end"
                         className="h-11 w-14 shrink-0 cursor-pointer rounded-lg border border-white/10 bg-transparent p-1"
                       />
-                      <span className="ml-auto rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">
-                        {Math.round(ring.gradient.angle)}°
-                      </span>
+                      {ring.gradient.type === 'radial' ? (
+                        <span className="ml-auto rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">center → out</span>
+                      ) : (
+                        <span className="ml-auto rounded bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-300">
+                          {Math.round(ring.gradient.angle)}°
+                        </span>
+                      )}
                     </div>
-                    <Slider
-                      label="Gradient angle"
-                      value={ring.gradient.angle}
-                      min={0}
-                      max={360}
-                      step={5}
-                      defaultVal={90}
-                      format={(v) => `${Math.round(v)}°`}
-                      onChange={(v) => patchRing(sel, { gradient: { ...ring.gradient!, angle: v } })}
-                    />
+                    {ring.gradient.type !== 'radial' && (
+                      <Slider
+                        label="Gradient angle"
+                        value={ring.gradient.angle}
+                        min={0}
+                        max={360}
+                        step={5}
+                        defaultVal={90}
+                        format={(v) => `${Math.round(v)}°`}
+                        onChange={(v) => patchRing(sel, { gradient: { ...ring.gradient!, angle: v } })}
+                      />
+                    )}
                   </div>
                 ) : (
                   <ColorPicker selected={ring.color} onChange={(c) => patchRing(sel, { color: c })} />
@@ -1237,30 +1275,22 @@ const BorderStackBuilder: React.FC = () => {
           <Slider label="Gap between borders" value={cfg.gap} min={0} max={24} step={1} defaultVal={4} format={(v) => `${Math.round(v)}px`} onChange={(v) => patch({ gap: v })} />
 
           <p className="text-[10px] leading-relaxed text-zinc-500">
-            Borders wrap the object as one layer, following its crop shape (or native shape) — a reversible mask keeps the full frame instead. Per-border gradient colors supported. Remove anytime to edit the original.
+            Borders wrap the object as one layer, following its crop shape (or native shape) — a reversible mask keeps the full frame instead. Per-border solid, linear and radial gradients supported. Every change applies automatically.
           </p>
 
-          {/* Sticky apply — never buried under the ring list */}
-          <StickyBar>
-            <div className="flex gap-2">
+          {/* Sticky remove — never buried under the ring list. Applying is
+              automatic; the only explicit action left is the destructive one. */}
+          {isRingGroup && (
+            <StickyBar>
               <button
-                onClick={() => applyBorderStack(cfg)}
-                className="focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 text-xs font-bold text-white transition-transform active:scale-[0.98]"
+                onClick={removeBorderStack}
+                className="focus-ring flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-4 text-xs font-bold text-red-400 hover:bg-red-500/20"
               >
-                <FaCheck /> {isRingGroup ? 'Update' : 'Apply'}
+                <FaTrashCan /> Remove borders
               </button>
-              {isRingGroup && (
-                <button
-                  onClick={removeBorderStack}
-                  className="focus-ring flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-4 text-xs font-bold text-red-400 hover:bg-red-500/20"
-                >
-                  <FaTrashCan /> Remove
-                </button>
-              )}
-            </div>
-          </StickyBar>
+            </StickyBar>
+          )}
         </div>
-      )}
     </div>
   );
 };
@@ -1286,8 +1316,10 @@ const SHADOW_PRESETS: { name: string; cfg: Partial<ShadowFxConfig> }[] = [
   { name: 'Soft', cfg: { mode: 'solid', color: '#000000', distance: 14, blur: 26, spread: 0, opacity: 0.4, angle: 90 } },
   { name: 'Hard', cfg: { mode: 'solid', color: '#000000', distance: 8, blur: 0, spread: 0, opacity: 0.85, angle: 90 } },
   { name: 'Glow 360°', cfg: { mode: 'solid', color: '#a855f7', distance: 0, blur: 28, spread: 2, opacity: 0.8 } },
-  { name: 'Neon grad', cfg: { mode: 'gradient', gradA: '#22d3ee', gradB: '#a855f7', gradAngle: 90, distance: 10, blur: 24, spread: 0, opacity: 0.75, angle: 90 } },
-  { name: 'Side sweep', cfg: { mode: 'gradient', gradA: '#f472b6', gradB: '#6366f1', gradAngle: 0, distance: 18, blur: 18, spread: 4, opacity: 0.65, angle: 180 } },
+  // gradType is pinned so a Radial left active can't silently swallow a
+  // preset's intended direction
+  { name: 'Neon grad', cfg: { mode: 'gradient', gradA: '#22d3ee', gradB: '#a855f7', gradAngle: 90, gradType: 'linear', distance: 10, blur: 24, spread: 0, opacity: 0.75, angle: 90 } },
+  { name: 'Side sweep', cfg: { mode: 'gradient', gradA: '#f472b6', gradB: '#6366f1', gradAngle: 0, gradType: 'linear', distance: 18, blur: 18, spread: 4, opacity: 0.65, angle: 180 } },
 ];
 
 const ShadowFxBuilder: React.FC = () => {
@@ -1356,26 +1388,32 @@ const ShadowFxBuilder: React.FC = () => {
 
           {cfg.mode === 'gradient' ? (
             <div className="space-y-3">
+              <div className="flex gap-2">
+                <Chip active={cfg.gradType !== 'radial'} onClick={() => patch({ gradType: 'linear' })} className="min-h-10 flex-1">Linear</Chip>
+                <Chip active={cfg.gradType === 'radial'} onClick={() => patch({ gradType: 'radial' })} className="min-h-10 flex-1">Radial</Chip>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label>Grad start</Label>
+                  <Label>{cfg.gradType === 'radial' ? 'Grad center' : 'Grad start'}</Label>
                   <ColorPicker selected={cfg.gradA} onChange={(c) => patch({ gradA: c })} />
                 </div>
                 <div>
-                  <Label>Grad end</Label>
+                  <Label>{cfg.gradType === 'radial' ? 'Grad edge' : 'Grad end'}</Label>
                   <ColorPicker selected={cfg.gradB} onChange={(c) => patch({ gradB: c })} />
                 </div>
               </div>
-              <Slider
-                label="Gradient direction"
-                value={cfg.gradAngle}
-                min={0}
-                max={360}
-                step={5}
-                defaultVal={90}
-                format={(v) => `${Math.round(v)}°`}
-                onChange={(v) => patch({ gradAngle: v })}
-              />
+              {cfg.gradType !== 'radial' && (
+                <Slider
+                  label="Gradient direction"
+                  value={cfg.gradAngle}
+                  min={0}
+                  max={360}
+                  step={5}
+                  defaultVal={90}
+                  format={(v) => `${Math.round(v)}°`}
+                  onChange={(v) => patch({ gradAngle: v })}
+                />
+              )}
             </div>
           ) : (
             <div>
@@ -1470,22 +1508,35 @@ const ShadowFxBuilder: React.FC = () => {
 const GradientStrokeSection: React.FC = () => {
   const { editorState, activeObj, updateStyle, setObjectGradientStroke, setObjectSolidStroke } = useEditor();
   // Live detection (structural, like the fill-mode detection above): a gradient
-  // stroke is a Gradient instance, not a string.
+  // stroke is a Gradient instance, not a string. On shape-cropped objects the
+  // single border is a one-ring contour stack — seed from the ring gradient.
+  // `on` is DERIVED from the object (no mirrored state): picking a solid color
+  // from the Single picker replaces the gradient and the toggle must follow.
   const rawStroke: any = (activeObj as any)?.stroke;
-  const strokeIsGrad = !!(rawStroke && typeof rawStroke === 'object' && Array.isArray(rawStroke.colorStops));
+  const ringGrad: any = (activeObj as any)?.onyxRingCfg?.rings?.[0]?.gradient;
+  const on = !!(
+    (rawStroke && typeof rawStroke === 'object' && Array.isArray(rawStroke.colorStops)) ||
+    ringGrad
+  );
+  const strokeIsRadial =
+    ringGrad?.type === 'radial' || (on && !ringGrad && rawStroke?.type === 'radial');
   const [a, setA] = useState('#6366f1');
   const [b, setB] = useState('#22d3ee');
   const [angle, setAngle] = useState(90);
-  const [on, setOn] = useState(strokeIsGrad);
+  const [radial, setRadial] = useState(strokeIsRadial);
   // Re-seed when the selection changes (same pattern as the border/shadow
-  // builders) — otherwise the toggle + colors describe the PREVIOUS object.
+  // builders) — otherwise the colors describe the PREVIOUS object.
   const [lastObj, setLastObj] = useState<fabric.Object | null | undefined>(activeObj);
   if (activeObj !== lastObj) {
     setLastObj(activeObj);
-    setOn(strokeIsGrad);
-    // Seed the pickers from the object's ACTUAL gradient — the first tweak must
-    // not jump from a stale/default color to the real one.
-    if (strokeIsGrad && Array.isArray(rawStroke.colorStops)) {
+    setRadial(strokeIsRadial);
+    // Seed the pickers from the object's ACTUAL gradient (plain stroke or ring
+    // contour) — the first tweak must not jump from a stale color to the real one.
+    if (ringGrad) {
+      if (typeof ringGrad.a === 'string') setA(ringGrad.a);
+      if (typeof ringGrad.b === 'string') setB(ringGrad.b);
+      if (typeof ringGrad.angle === 'number') setAngle(ringGrad.angle);
+    } else if (on && Array.isArray(rawStroke.colorStops)) {
       const c0 = rawStroke.colorStops[0]?.color;
       const c1 = rawStroke.colorStops[rawStroke.colorStops.length - 1]?.color;
       if (typeof c0 === 'string' && /^#/.test(c0)) setA(c0);
@@ -1493,12 +1544,17 @@ const GradientStrokeSection: React.FC = () => {
     }
   }
 
-  const applyGrad = (na: string, nb: string, nAngle: number) => {
+  const applyGrad = (na: string, nb: string, nAngle: number, nRadial: boolean) => {
     // A stroke with width 0 renders NOTHING — seed a visible width so the
     // toggle never looks dead on a fresh object.
     if (!editorState.strokeW) updateStyle('strokeW', 3);
-    // App angles are screen-space (0° = →); CSS 0° = up — convert before parsing
-    setObjectGradientStroke(`linear-gradient(${(nAngle + 90) % 360}deg, ${na}, ${nb})`);
+    // App angles are screen-space (0° = →); CSS 0° = up — convert before parsing.
+    // Radial has no direction — center out.
+    setObjectGradientStroke(
+      nRadial
+        ? `radial-gradient(circle, ${na}, ${nb})`
+        : `linear-gradient(${(nAngle + 90) % 360}deg, ${na}, ${nb})`
+    );
   };
 
   return (
@@ -1509,10 +1565,8 @@ const GradientStrokeSection: React.FC = () => {
           type="button"
           aria-pressed={on}
           onClick={() => {
-            const next = !on;
-            setOn(next);
-            if (next) applyGrad(a, b, angle);
-            else setObjectSolidStroke(editorState.strokeC || '#ffffff');
+            if (on) setObjectSolidStroke(editorState.strokeC || '#ffffff');
+            else applyGrad(a, b, angle, radial);
           }}
           className={clsx(
             'focus-ring relative h-5 w-9 rounded-full transition-colors',
@@ -1524,31 +1578,37 @@ const GradientStrokeSection: React.FC = () => {
       </div>
       {on && (
         <div className="mt-3 space-y-3">
+          <div className="flex gap-2">
+            <Chip active={!radial} onClick={() => { setRadial(false); applyGrad(a, b, angle, false); }} className="min-h-10 flex-1">Linear</Chip>
+            <Chip active={radial} onClick={() => { setRadial(true); applyGrad(a, b, angle, true); }} className="min-h-10 flex-1">Radial</Chip>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>Start</Label>
-              <ColorPicker selected={a} onChange={(c) => { setA(c); applyGrad(c, b, angle); }} />
+              <Label>{radial ? 'Center' : 'Start'}</Label>
+              <ColorPicker selected={a} onChange={(c) => { setA(c); applyGrad(c, b, angle, radial); }} />
             </div>
             <div>
-              <Label>End</Label>
-              <ColorPicker selected={b} onChange={(c) => { setB(c); applyGrad(a, c, angle); }} />
+              <Label>{radial ? 'Edge' : 'End'}</Label>
+              <ColorPicker selected={b} onChange={(c) => { setB(c); applyGrad(a, c, angle, radial); }} />
             </div>
           </div>
-          <Slider
-            label="Direction"
-            value={angle}
-            min={0}
-            max={360}
-            step={5}
-            defaultVal={90}
-            format={(v) => `${Math.round(v)}°`}
-            onChange={(v) => setAngle(v)}
-            // v, not the `angle` closure: a double-click reset fires onChange +
-            // onCommit in the SAME tick — before the next render — so the
-            // closure still holds the pre-reset angle and would write the OLD
-            // gradient to the object.
-            onCommit={(v) => applyGrad(a, b, v)}
-          />
+          {!radial && (
+            <Slider
+              label="Direction"
+              value={angle}
+              min={0}
+              max={360}
+              step={5}
+              defaultVal={90}
+              format={(v) => `${Math.round(v)}°`}
+              onChange={(v) => setAngle(v)}
+              // v, not the `angle` closure: a double-click reset fires onChange +
+              // onCommit in the SAME tick — before the next render — so the
+              // closure still holds the pre-reset angle and would write the OLD
+              // gradient to the object.
+              onCommit={(v) => applyGrad(a, b, v, false)}
+            />
+          )}
         </div>
       )}
     </div>
@@ -1558,9 +1618,21 @@ const GradientStrokeSection: React.FC = () => {
 const StylePanel: React.FC = () => {
   const {
     activeObj, editorState, subTool, setSubTool, updateStyle, commitHistory,
-    setObjectGradientFill, setObjectImageFill, setObjectSolidFill,
+    setObjectGradientFill, setObjectImageFill, setObjectSolidFill, removeBorderStack,
   } = useEditor();
   const imgFillRef = useRef<HTMLInputElement>(null);
+  /** Local width while the slider is HELD. The contour-border path rebuilds a
+   *  ring group per change (async) and syncFromObject re-seeds editorState —
+   *  without this the thumb would snap back a tick mid-drag. */
+  const [localW, setLocalW] = useState<number | null>(null);
+  // a vanished selection (delete/undo mid-drag) must not leak localW into the
+  // NEXT object's slider — clear it as soon as nothing is selected (render-phase
+  // tracker, same pattern as the builders)
+  const [lastSelW, setLastSelW] = useState<fabric.Object | null | undefined>(activeObj);
+  if (activeObj !== lastSelW) {
+    setLastSelW(activeObj);
+    if (!activeObj) setLocalW(null);
+  }
   if (!activeObj) {
     return <p className="py-6 text-center text-xs text-zinc-500">Select an object to style it.</p>;
   }
@@ -1582,6 +1654,13 @@ const StylePanel: React.FC = () => {
   const shownFill: 'solid' | 'gradient' | 'image' =
     subTool === 'fill-gradient' ? 'gradient' : subTool === 'fill-image' ? 'image' : subTool === 'fill-solid' ? 'solid' : fillMode;
 
+  /** Border mode: Single by default — a multi-ring object opens in Multi so
+   *  its stack is immediately editable. Explicit chip choice wins per object. */
+  const ringCount: number = (activeObj as any).onyxRingCfg?.count || 0;
+  const isMultiRing = ringCount > 1;
+  const borderMode: 'single' | 'multi' =
+    subTool === 'border-multi' ? 'multi' : subTool === 'border-single' ? 'single' : isMultiRing ? 'multi' : 'single';
+
   const tabs = [
     ...(fillable ? [{ id: 'fill', label: 'Fill' }] : []),
     { id: 'border', label: 'Border' },
@@ -1589,7 +1668,10 @@ const StylePanel: React.FC = () => {
     { id: 'opacity', label: 'Opacity' },
     ...(activeObj.type === 'rect' ? [{ id: 'radius', label: 'Radius' }] : []),
   ];
-  const activeTab = subTool && tabs.some((t) => t.id === subTool) ? subTool : tabs[0].id;
+  // border-single / border-multi keep the BORDER tab active (they are mode
+  // chips within it, not separate tabs)
+  const tabFromSub = subTool?.startsWith('border-') ? 'border' : subTool;
+  const activeTab = tabFromSub && tabs.some((t) => t.id === tabFromSub) ? tabFromSub : tabs[0].id;
 
   const onFillImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -1609,7 +1691,11 @@ const StylePanel: React.FC = () => {
         {tabs.map((t) => (
           <button
             key={t.id}
-            onClick={() => setSubTool(t.id)}
+            // re-clicking the ACTIVE tab is a no-op — it used to reset subTool
+            // and silently discard an explicit Single/Multi choice
+            onClick={() => {
+              if (activeTab !== t.id) setSubTool(t.id);
+            }}
             className={clsx(
               'flex min-h-[38px] shrink-0 items-center rounded-lg px-3 text-[11px] font-bold uppercase tracking-wide transition-colors',
               activeTab === t.id
@@ -1667,10 +1753,52 @@ const StylePanel: React.FC = () => {
 
       {activeTab === 'border' && (
         <>
-          <Slider label="Width" value={editorState.strokeW} min={0} max={40} step={1} defaultVal={0} onChange={(v) => updateStyle('strokeW', v)} onCommit={commitHistory} />
-          <div><Label>Color</Label><ColorPicker selected={editorState.strokeC} onChange={(c) => updateStyle('strokeC', c)} /></div>
-          <GradientStrokeSection />
-          <BorderStackBuilder />
+          {/* Single/Multi mode chips — SINGLE is the default. A ring-stack
+              object opens straight into Multi so its borders are editable. */}
+          <div className="flex gap-2">
+            <Chip active={borderMode === 'single'} onClick={() => setSubTool('border-single')} className="flex-1">Single</Chip>
+            <Chip active={borderMode === 'multi'} onClick={() => setSubTool('border-multi')} className="flex-1">Multi-border</Chip>
+          </div>
+          {borderMode === 'multi' ? (
+            <BorderStackBuilder />
+          ) : isMultiRing ? (
+            /* Single controls on a multi-ring stack are a placebo at best (a
+               group ignores strokeWidth) and destructive at worst (the contour
+               path would flatten the stack) — point the user at Multi instead. */
+            <div className="rounded-xl border border-white/10 bg-zinc-800/40 p-3 text-center">
+              <p className="text-xs font-bold text-zinc-300">
+                This object carries a <span className="text-indigo-300">{ringCount}-border</span> stack
+              </p>
+              <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                Single-border controls do not apply to it. Edit the rings in Multi-border, or remove the stack first.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Chip onClick={() => setSubTool('border-multi')} className="flex-1">Edit in Multi-border</Chip>
+                <Chip onClick={removeBorderStack} className="flex-1">Remove borders</Chip>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Slider
+                label="Width"
+                value={localW ?? editorState.strokeW}
+                min={0}
+                max={40}
+                step={1}
+                defaultVal={0}
+                onChange={(v) => {
+                  setLocalW(v);
+                  updateStyle('strokeW', v);
+                }}
+                onCommit={() => {
+                  setLocalW(null);
+                  commitHistory();
+                }}
+              />
+              <div><Label>Color</Label><ColorPicker selected={editorState.strokeC} onChange={(c) => updateStyle('strokeC', c)} /></div>
+              <GradientStrokeSection />
+            </>
+          )}
         </>
       )}
       {activeTab === 'shadow' && (
@@ -1724,7 +1852,7 @@ export const PANEL_TITLES: Record<string, string> = {
   STICKER: 'Stickers',
   ADJUST: 'Adjust',
   FILTER: 'Filters',
-  MASK: 'Mask & crop',
+  MASK: 'Mask',
   MASK_EDIT: 'Mask',
   ARRANGE: 'Arrange',
   STYLE: 'Style',

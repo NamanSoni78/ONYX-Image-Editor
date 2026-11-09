@@ -87,6 +87,8 @@ export interface ShadowFxConfig {
   gradA: string;
   gradB: string;
   gradAngle: number;
+  /** gradient mode: linear (default) or center-out radial */
+  gradType?: 'linear' | 'radial';
 }
 
 /** A true (destructive, rasterized) shape crop applied to any object */
@@ -127,7 +129,7 @@ export interface BorderRing {
   width: number;
   color: string;
   /** optional per-ring gradient stroke (overrides the solid color) */
-  gradient?: { a: string; b: string; angle: number };
+  gradient?: { a: string; b: string; angle: number; type?: 'linear' | 'radial' };
 }
 
 /** Configuration for the fancy multi-border feature */
@@ -208,8 +210,9 @@ export interface EditorAPI {
   setObjectGradientFill: (css: string) => void;
   setObjectImageFill: (dataUrl: string) => void;
   setObjectSolidFill: (color: string) => void;
-  /** decorative multi-border stack around the selected object */
-  applyBorderStack: (cfg: BorderStackConfig) => void;
+  /** decorative multi-border stack around the selected object
+   *  (quiet = no success toast — used by auto-apply) */
+  applyBorderStack: (cfg: BorderStackConfig, opts?: { quiet?: boolean }) => void;
   removeBorderStack: () => void;
   /** advanced gradient / 360° shadow (blurred silhouette behind the object) */
   applyShadowFx: (cfg: ShadowFxConfig) => void;

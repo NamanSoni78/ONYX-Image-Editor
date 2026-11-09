@@ -206,13 +206,21 @@ const mixHex = (a: string, b: string, t: number): string => {
   return `#${p.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 };
 
-/** Linear canvas gradient between two colors across a w×h box (screen-space angle). */
+/** Linear / radial canvas gradient between two colors across a w×h box
+ *  (screen-space angle for linear; center-out for radial). */
 const makeCtxGradient = (
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  g: { a: string; b: string; angle: number }
+  g: { a: string; b: string; angle: number; type?: 'linear' | 'radial' }
 ): CanvasGradient => {
+  if (g.type === 'radial') {
+    const r = Math.max(1, Math.max(w, h) / 2);
+    const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, r);
+    grad.addColorStop(0, g.a);
+    grad.addColorStop(1, g.b);
+    return grad;
+  }
   const rad = ((g.angle || 0) * Math.PI) / 180;
   const len = (Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad))) / 2 || 1;
   const dx = Math.cos(rad) * len;
@@ -962,7 +970,7 @@ const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null):
         out.push({
           width: clamp(r.width, 1, 60),
           color: r.color,
-          gradient: r.gradient ? { a: r.gradient.a, b: r.gradient.b, angle: r.gradient.angle || 0 } : undefined,
+          gradient: r.gradient ? { a: r.gradient.a, b: r.gradient.b, angle: r.gradient.angle || 0, type: r.gradient.type } : undefined,
         });
       }
       return out;
@@ -1059,7 +1067,7 @@ const rasterizeObjectToImage = (obj: fabric.Object, spec: CropShapeSpec | null):
     rctx.globalCompositeOperation = 'source-in';
     rctx.fillStyle =
       cfg.mode === 'gradient'
-        ? makeCtxGradient(rctx, rec.width, rec.height, { a: cfg.gradA, b: cfg.gradB, angle: cfg.gradAngle })
+        ? makeCtxGradient(rctx, rec.width, rec.height, { a: cfg.gradA, b: cfg.gradB, angle: cfg.gradAngle, type: cfg.gradType })
         : cfg.color;
     rctx.fillRect(0, 0, rec.width, rec.height);
 
@@ -1299,11 +1307,49 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const guidesRef = useRef<{ x: number | null; y: number | null } | null>(null);
   /** guards re-entrant border builds (async image load) */
   const borderBusyRef = useRef(false);
+  /** auto-apply queue: latest ring cfg that arrived while a rebuild was
+   *  in flight — flushed as soon as the rebuild completes (otherwise a slider
+   *  tick landing mid-rebuild would be silently dropped). Carries the target
+   *  core so a stale cfg can never border a DIFFERENT object. */
+  const pendingRingRef = useRef<{ cfg: BorderStackConfig; core: fabric.Object } | null>(null);
+  /** while a border rebuild is in flight: the core being rebuilt + the cfg it
+   *  is being rebuilt WITH. The live selection points at a destroyed group in
+   *  that window — contour-stroke patches merge against THESE instead. */
+  const busyCoreRef = useRef<fabric.Object | null>(null);
+  const busyRingCfgRef = useRef<BorderStackConfig | null>(null);
+  /** a Width→0 that arrived mid-rebuild: honored by the flush (the queued ring
+   *  cfg is discarded) so dragging the width to 0 always ends borderless */
+  const pendingRingRemoveRef = useRef<fabric.Object | null>(null);
+  /** late-bound so updateStyle (defined earlier in the body) can route single-
+   *  border styling through the contour ring engine on shape-cropped objects */
+  const contourStrokeRef = useRef<
+    (patch: {
+      width?: number;
+      color?: string;
+      gradient?: { a: string; b: string; angle: number; type?: 'linear' | 'radial' } | null;
+    }) => boolean
+  >(() => false);
+  /** contour-stroke debounce accumulator — slider ticks merge into ONE ring
+   *  rebuild per pause (per-tick rebuilds spammed history + janked phones) */
+  const contourPatchAccRef = useRef<{
+    width?: number;
+    color?: string;
+    gradient?: { a: string; b: string; angle: number; type?: 'linear' | 'radial' } | null;
+  } | null>(null);
+  const contourDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyBorderStackRef = useRef<(cfg: BorderStackConfig, opts?: { quiet?: boolean }) => void>(() => {});
+  const removeBorderStackRef = useRef<() => void>(() => {});
   /** guards re-entrant adjust-rasterize (async — slider ticks retrigger it) */
   const rasterBusyRef = useRef(false);
   /** lock ownership token — async callbacks must not unlock a newer owner's lock */
   const lockTokenRef = useRef(0);
   const historyRef = useRef<{ json: string; w: number; h: number }[]>([]);
+  /** Latest serialized doc (written by saveHistory). doSave reuses it instead of
+   *  re-stringifying a multi-MB canvas on EVERY debounced autosave — that second
+   *  synchronous stringify (plus the thumbnail capture) was the 0.2–0.3 s main-
+   *  thread block users saw as a blank/black flash after every change.
+   *  Invalidated by paths that mutate without a history push (text:changed). */
+  const lastJsonRef = useRef<string | null>(null);
   const historyStepRef = useRef(-1);
   const isLockedRef = useRef(false);
   const projectIdRef = useRef<string | null>(null);
@@ -1323,6 +1369,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const exportBusyRef = useRef(false);
   /** set after debouncedSave is created; lets earlier closures schedule saves */
   const scheduleSaveRef = useRef<() => void>(() => {});
+  /** autosave concurrency guards: one heavy pass at a time + rerun flag */
+  const saveInFlightRef = useRef(false);
+  const saveAgainRef = useRef(false);
 
   /* ---------- state ---------- */
   const [activeObj, setActiveObj] = useState<fabric.Object | null>(null);
@@ -1485,11 +1534,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     // already-default slider) pushes a JSON-identical entry — the next undo
     // would then be a silent no-op. Collapse it.
     const top = historyRef.current[historyStepRef.current];
-    if (top && top.json === entry.json && top.w === entry.w && top.h === entry.h) return;
+    if (top && top.json === entry.json && top.w === entry.w && top.h === entry.h) {
+      lastJsonRef.current = entry.json; // still the fresh truth for autosave
+      return;
+    }
     if (historyStepRef.current < historyRef.current.length - 1) {
       historyRef.current = historyRef.current.slice(0, historyStepRef.current + 1);
     }
     historyRef.current.push(entry);
+    lastJsonRef.current = entry.json;
     if (historyRef.current.length > 50) {
       historyRef.current.shift();
     }
@@ -1545,6 +1598,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       isLockedRef.current = true;
       // invalidate any in-flight async callback's lock ownership
       lockTokenRef.current++;
+      // The restored entry IS the new canvas truth — keep the autosave cache
+      // in sync or the next debounced save would persist the PRE-undo state.
+      lastJsonRef.current = entry.json;
       c.loadFromJSON(entry.json, () => {
         frameRef.current = (c.getObjects().find((o) => (o as any).name === FRAME_NAME) as fabric.Rect) || frameRef.current;
         applyDocSize(entry.w, entry.h, { fit: false });
@@ -1604,7 +1660,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const prevFrameVisible = frame ? frame.visible : true;
       const prevFrameFill = frame ? frame.fill : undefined;
       const prevBgColor = c.backgroundColor as string | fabric.Pattern | undefined;
-      const prevActive = c.getActiveObject();
 
       const { width: dw, height: dh } = docSizeRef.current;
       // Pick export grabs a sub-region of the document instead of the full frame
@@ -1637,8 +1692,12 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const wantTransparent = !!opts.transparent && opts.format !== 'jpeg';
 
       let url = '';
-      // Suppress selection events while we discard + restore the selection
+      // Suppress selection events while we temporarily touch frame/background
       // (otherwise the UI would think the user deselected).
+      // NB: the ACTIVE OBJECT is deliberately NOT discarded here — fabric's
+      // toCanvasElement renders with interactive=false so selection controls
+      // are never in the capture anyway, and the discard/restore pair fired a
+      // selection:cleared→created churn on EVERY autosave thumbnail.
       isCapturingRef.current = true;
       try {
         if (frame) {
@@ -1652,7 +1711,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           }
         }
 
-        c.discardActiveObject();
         const captured = captureRegion(c, reg ? reg.left : 0, reg ? reg.top : 0, baseW, baseH, captureScale);
 
         // Compose the final canvas: exact size, optional shape mask
@@ -1680,7 +1738,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           frame.set('visible', prevFrameVisible);
           frame.set('fill', prevFrameFill);
         }
-        if (prevActive) c.setActiveObject(prevActive);
         isCapturingRef.current = false;
       }
       c.requestRenderAll();
@@ -1715,8 +1772,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const prevFrameVisible = frame ? frame.visible : true;
       const prevFrameFill = frame ? frame.fill : undefined;
       const prevBgColor = c.backgroundColor as string | fabric.Pattern | undefined;
-      const prevActive = c.getActiveObject();
-
       const { width: dw, height: dh } = docSizeRef.current;
       const reg = opts.region;
       const baseW = reg ? reg.width : dw;
@@ -1769,7 +1824,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
             frame.set('fill', '#ffffff');
           }
         }
-        c.discardActiveObject();
 
         const clipShape = opts.shape && opts.shape !== 'none' ? opts.shape : null;
         if (clipShape) {
@@ -1813,7 +1867,6 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           frame.set('visible', prevFrameVisible);
           frame.set('fill', prevFrameFill);
         }
-        if (prevActive) c.setActiveObject(prevActive);
         isCapturingRef.current = false;
         c.requestRenderAll();
       }
@@ -1830,6 +1883,14 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const doSave = useCallback(async () => {
     const c = canvasRef.current;
     if (!c || isLockedRef.current) return;
+    if (saveInFlightRef.current) {
+      // a save is already running — remember to run one more pass afterwards
+      // so the LAST change always lands (the debouncer already coalesced most)
+      saveAgainRef.current = true;
+      return;
+    }
+    saveInFlightRef.current = true;
+    saveAgainRef.current = false;
     setSaveState('saving');
     try {
       let pid = projectIdRef.current;
@@ -1843,20 +1904,60 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         (window as any).__onyxAdoptedPid = pid;
         window.history.replaceState(null, '', `/editor?project=${pid}`);
       }
-      const json = canvasToJson(c);
-      let thumb: string | undefined;
-      try {
-        thumb = renderDocDataURL({ format: 'jpeg', quality: 0.55, targetWidth: 240 }).url;
-      } catch {
-        thumb = undefined;
-      }
-      await updateProject(pid, json, thumb, projectNameRef.current, {
-        docW: docSizeRef.current.width,
-        docH: docSizeRef.current.height,
-      });
+      // Heavy work (serializing a multi-MB doc + thumbnail capture) runs when
+      // the browser is IDLE, never mid-interaction — the old synchronous pass
+      // blocked paint for 0.2–0.3 s after every change and read as a blank/
+      // black flash on phones. requestIdleCallback with a timeout keeps the
+      // save prompt even under continuous interaction.
+      const heavy = async (): Promise<void> => {
+        // An undo/project-load may have taken the lock while we idled — saving
+        // (and thumbnail-capturing) mid-load would persist a torn state. Retry
+        // via the rerun flag instead.
+        if (isLockedRef.current) {
+          saveAgainRef.current = true;
+          return;
+        }
+        const json = lastJsonRef.current ?? canvasToJson(c);
+        let thumb: string | undefined;
+        try {
+          thumb = renderDocDataURL({ format: 'jpeg', quality: 0.55, targetWidth: 240 }).url;
+        } catch {
+          thumb = undefined;
+        }
+        await updateProject(pid!, json, thumb, projectNameRef.current, {
+          docW: docSizeRef.current.width,
+          docH: docSizeRef.current.height,
+        });
+      };
+      const runIdle = async (): Promise<void> =>
+        new Promise<void>((resolve) => {
+          const ric = (window as any).requestIdleCallback as
+            | ((cb: () => void, o?: { timeout: number }) => number)
+            | undefined;
+          if (typeof ric === 'function') {
+            const id = ric(() => resolve(), { timeout: 600 });
+            // resolve-once safety if the tab is backgrounded/idle-starved
+            setTimeout(() => resolve(), 1200);
+            void id;
+          } else {
+            setTimeout(resolve, 0);
+          }
+        });
+      await runIdle();
+      await heavy();
       setSaveState('saved');
+      // Insurance against a browser-discarded 2D canvas backing store (memory
+      // pressure during the save's allocations): force one repaint so the
+      // artwork is always on screen when the "Saved" badge appears.
+      canvasRef.current?.requestRenderAll();
     } catch {
       setSaveState('scratch');
+    } finally {
+      saveInFlightRef.current = false;
+      if (saveAgainRef.current) {
+        saveAgainRef.current = false;
+        void doSave();
+      }
     }
   }, [renderDocDataURL]);
 
@@ -1894,11 +1995,27 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       setActiveObj(obj);
       activeObjRef.current = obj;
 
-      // A different object was selected — drop any stale fill sub-mode so the
-      // Style panel reflects the NEW object's actual fill (solid/gradient/image).
+      // A different object was selected — drop any stale fill AND border mode
+      // chips so the Style panel reflects the NEW object (a multi-ring group
+      // re-opens in Multi mode, everything else in the Single default).
+      // EXCEPT when it's the same CORE: border/shadow rebuilds replace the
+      // group wrapper on every apply — that must not read as an object switch
+      // (it would eject the user out of Multi mode mid-edit).
       if (obj !== prevSelRef.current) {
+        const coreOf = (o: fabric.Object | null | undefined): fabric.Object | null | undefined => {
+          const g: any = o;
+          if (g && g.type === 'group' && (g.onyxRing || g.onyxShadowCfg)) {
+            return g
+              .getObjects()
+              .find((x: any) => !(x as any).onyxRingPart && !(x as any).onyxShadowPart);
+          }
+          return o;
+        };
+        const sameCore = !!coreOf(obj) && coreOf(obj) === coreOf(prevSelRef.current);
         prevSelRef.current = obj;
-        setSubTool((st) => (st && st.startsWith('fill-') ? null : st));
+        if (!sameCore) {
+          setSubTool((st) => (st && (st.startsWith('fill-') || st.startsWith('border-')) ? null : st));
+        }
       }
 
       const st: Partial<EditorState> = {
@@ -1936,6 +2053,17 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         st.shadowB = 0;
         st.shadowO = 10;
         st.shadowC = '#000000';
+      }
+
+      // A one-ring stack IS the single border of a shape-cropped object (the
+      // contour stroke). Seed the Width/Color controls from the ring so the
+      // sliders describe the border the user actually sees.
+      const ringCfg: BorderStackConfig | undefined = (obj as any).onyxRingCfg;
+      if (ringCfg && ringCfg.count === 1 && ringCfg.rings?.[0]) {
+        st.strokeW = ringCfg.rings[0].width;
+        if (typeof ringCfg.rings[0].color === 'string' && ringCfg.rings[0].color) {
+          st.strokeC = ringCfg.rings[0].color;
+        }
       }
 
       // Gradient / pattern fills are not plain colors — anchor the solid picker on
@@ -2079,7 +2207,12 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         scheduleSaveRef.current();
       }
     });
-    c.on('text:changed', () => scheduleSaveRef.current());
+    c.on('text:changed', () => {
+      // per-keystroke edits never push history — the cached serialization is
+      // now stale, so autosave must re-stringify on its next pass
+      lastJsonRef.current = null;
+      scheduleSaveRef.current();
+    });
     // NB: no text:editing:exited handler needed — fabric's exitEditing fires
     // 'modified' on the object when the text changed, which forwards to the
     // canvas 'object:modified' handler above (verified: it commits there).
@@ -3069,10 +3202,26 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const obj = getActive();
       const c = canvasRef.current;
       if (!obj || !c) return;
+      // These mutations autosave WITHOUT a history push (sliders commit later,
+      // color picks never) — the cached serialization would silently persist
+      // the PRE-change canvas on the next debounced save. Invalidate it.
+      lastJsonRef.current = null;
       switch (key) {
         case 'fill': obj.set('fill', v); break;
-        case 'strokeC': obj.set('stroke', v); break;
-        case 'strokeW': obj.set('strokeWidth', parseInt(v) || 0); break;
+        case 'strokeC': {
+          // Shape-cropped objects: the border must hug the crop CONTOUR — a
+          // plain fabric stroke would rectangle-outline the transparent
+          // corners. applyContourStroke returns false for normal objects.
+          if (contourStrokeRef.current({ color: v })) break;
+          obj.set('stroke', v);
+          break;
+        }
+        case 'strokeW': {
+          const w = parseInt(v) || 0;
+          if (contourStrokeRef.current({ width: w })) break;
+          obj.set('strokeWidth', w);
+          break;
+        }
         case 'bg': obj.set('backgroundColor', v); break;
         case 'font': (obj as any).set('fontFamily', v); break;
         case 'fontSize': (obj as any).set('fontSize', v); break;
@@ -3113,6 +3262,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const c = canvasRef.current;
       if (!obj || (obj.type !== 'i-text' && obj.type !== 'text') || !c) return;
       const text = obj as fabric.IText;
+      // commit-less mutation — keep the autosave cache honest (see updateStyle)
+      lastJsonRef.current = null;
       switch (t) {
         case 'bold': text.set('fontWeight', text.fontWeight === 'bold' ? 'normal' : 'bold'); break;
         case 'italic': text.set('fontStyle', text.fontStyle === 'italic' ? 'normal' : 'italic'); break;
@@ -3242,7 +3393,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       target: fabric.Object,
       cfgs: { ring?: BorderStackConfig; shadow?: ShadowFxConfig },
       focus: 'ring' | 'shadow',
-      prev: { ring?: BorderStackConfig; shadow?: ShadowFxConfig } = {}
+      prev: { ring?: BorderStackConfig; shadow?: ShadowFxConfig } = {},
+      opts: { quiet?: boolean } = {}
     ) => {
       const c = canvasRef.current;
       if (!c) return;
@@ -3343,6 +3495,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           if (lockTokenRef.current === myToken) {
             isLockedRef.current = false;
             borderBusyRef.current = false;
+            busyCoreRef.current = null;
+            busyRingCfgRef.current = null;
           }
         }
         if (ok) {
@@ -3350,18 +3504,46 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
           updateLayersNow();
           saveHistory();
           scheduleSaveRef.current();
-          toast(
-            focus === 'ring'
-              ? 'Border stack applied'
-              : cfgs.ring
-                ? 'Shadow + borders applied'
-                : 'Advanced shadow applied',
-            'success'
-          );
+          // quiet = auto-apply / slider drag: the user SEES the border change,
+          // a toast per tweak would be spam
+          if (!opts.quiet)
+            toast(
+              focus === 'ring'
+                ? 'Border stack applied'
+                : cfgs.ring
+                  ? 'Shadow + borders applied'
+                  : 'Advanced shadow applied',
+              'success'
+            );
+        }
+        // Auto-apply queue: a newer config arrived while this rebuild was in
+        // flight — apply it now that the canvas is idle again. (Skipped when a
+        // recursive rebuild took over the busy flag — that one flushes instead.)
+        if (!borderBusyRef.current && (pendingRingRef.current || pendingRingRemoveRef.current)) {
+          // a Width→0 that raced the rebuild wins over any queued ring cfg
+          const removeCore = pendingRingRemoveRef.current;
+          pendingRingRemoveRef.current = null;
+          const pending = pendingRingRef.current;
+          pendingRingRef.current = null;
+          // Stale guard: the rebuild just re-selected the freshly wrapped group.
+          // If the user meanwhile picked a DIFFERENT object, the queued cfg does
+          // not belong to it — dropping it beats bordering the wrong object.
+          const a: any = getActive();
+          const curCore: fabric.Object | undefined | null =
+            a?.type === 'group' && (a.onyxRing || a.onyxShadowCfg)
+              ? a
+                  .getObjects()
+                  .find((o: any) => !o.onyxRingPart && !o.onyxShadowPart)
+              : a;
+          if (removeCore && curCore === removeCore) {
+            removeBorderStackRef.current();
+          } else if (pending && curCore === pending.core) {
+            applyBorderStackRef.current(pending.cfg, { quiet: true });
+          }
         }
       })();
     },
-    [updateLayersNow, saveHistory, toast]
+    [getActive, updateLayersNow, saveHistory, toast]
   );
 
   /** Resolve the selection into (core object + current attachment cfgs).
@@ -3404,9 +3586,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
    * shape, its native shape — or stays on the full frame when only MASKED.
    */
   const applyBorderStack = useCallback(
-    (cfg: BorderStackConfig) => {
+    (cfg: BorderStackConfig, opts?: { quiet?: boolean }) => {
       const c = canvasRef.current;
-      if (!c || borderBusyRef.current) return;
+      if (!c) return;
       // validate the size BEFORE unwrapping — an aborted apply must never strip
       // the object's existing border/shadow effects
       const active = getActive();
@@ -3416,27 +3598,85 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
               .getObjects()
               .find((o) => !(o as any).onyxRingPart && !(o as any).onyxShadowPart)
           : (active as fabric.Object) || undefined;
-      if (peek && (peek.getScaledWidth() < 4 || peek.getScaledHeight() < 4)) {
-        toast('Object is too small to border', 'warning');
+      // A rebuild is in flight — QUEUE the newest cfg (with its target) instead
+      // of dropping it; rewrapWithAttachments flushes the queue when idle.
+      if (borderBusyRef.current) {
+        if (peek) pendingRingRef.current = { cfg, core: peek };
         return;
       }
-      const t = resolveAttachmentTarget();
-      if (!t) return;
-      const target = t.core;
-      if (target.getScaledWidth() < 4 || target.getScaledHeight() < 4) {
-        toast('Object is too small to border', 'warning');
-        return;
+      // OWN the busy flag from here on: the unwrap below does c.remove(group)
+      // which synchronously fires selection:cleared — without the flag that
+      // transient reads as a user deselect and closes the mobile sheet (and
+      // blanks the desktop panel) mid-apply. rewrapWithAttachments takes over
+      // the flag; every abort path clears it in the finally below.
+      borderBusyRef.current = true;
+      // contour patches arriving in the rebuild window merge against these
+      busyCoreRef.current = peek ?? null;
+      busyRingCfgRef.current = cfg;
+      let handedOff = false;
+      try {
+        if (peek && (peek.getScaledWidth() < 4 || peek.getScaledHeight() < 4)) {
+          if (!opts?.quiet) toast('Object is too small to border', 'warning');
+          return;
+        }
+        const t = resolveAttachmentTarget();
+        if (!t) return;
+        const target = t.core;
+        if (target.getScaledWidth() < 4 || target.getScaledHeight() < 4) {
+          if (!opts?.quiet) toast('Object is too small to border', 'warning');
+          return;
+        }
+        // A reversible MASK keeps the object's full bbox — the border wraps that
+        // full frame (square for a square→circle mask). Only the real Crop makes
+        // borders follow the shape.
+        if ((target as any).clipPath && !(target as any).onyxCropShape && !opts?.quiet) {
+          toast('Masked: border wraps the FULL frame — use Crop for shape-following borders', 'info');
+        }
+        rewrapWithAttachments(
+          target,
+          { ring: cfg, shadow: t.shadow },
+          'ring',
+          { ring: t.ring, shadow: t.shadow },
+          { quiet: !!opts?.quiet }
+        );
+        handedOff = true; // rewrap owns the busy flag + its token from here
+      } finally {
+        if (!handedOff) {
+          borderBusyRef.current = false;
+          busyCoreRef.current = null;
+          busyRingCfgRef.current = null;
+        }
       }
-      // A reversible MASK keeps the object's full bbox — the border wraps that
-      // full frame (square for a square→circle mask). Only the real Crop makes
-      // borders follow the shape.
-      if ((target as any).clipPath && !(target as any).onyxCropShape) {
-        toast('Masked: border wraps the FULL frame — use Crop for shape-following borders', 'info');
-      }
-      rewrapWithAttachments(target, { ring: cfg, shadow: t.shadow }, 'ring', { ring: t.ring, shadow: t.shadow });
     },
     [getActive, resolveAttachmentTarget, rewrapWithAttachments, toast]
   );
+  applyBorderStackRef.current = (cfg, opts) => applyBorderStack(cfg, opts);
+
+  /** Non-destructive peek at the effect target: the plain object, or the CORE
+   *  inside a ring/shadow group. Never unwraps — safe for reads. During a
+   *  border rebuild the live selection points at a DESTROYED group (unwrapped,
+   * _objects=[]), so the busy core + its in-flight cfg stand in for it. */
+  const peekStrokeTarget = useCallback((): { core: fabric.Object; ring?: BorderStackConfig } | null => {
+    const target = getActive();
+    const busy = borderBusyRef.current && busyCoreRef.current;
+    if (busy) {
+      const a: any = target;
+      const dead =
+        !a || a === busyCoreRef.current || (a.type === 'group' && (!a.getObjects || a.getObjects().length === 0));
+      if (dead) return { core: busyCoreRef.current!, ring: busyRingCfgRef.current || undefined };
+      // the user picked a DIFFERENT object mid-rebuild — fall through to it
+    }
+    if (!target) return null;
+    const t: any = target;
+    if (t.type === 'activeSelection') return null;
+    if (t.type === 'group' && (t.onyxRing || t.onyxShadowCfg)) {
+      const core = (target as fabric.Group)
+        .getObjects()
+        .find((o) => !(o as any).onyxRingPart && !(o as any).onyxShadowPart);
+      return core ? { core, ring: t.onyxRingCfg } : null;
+    }
+    return { core: target };
+  }, [getActive]);
 
   /** Remove the border stack — an advanced shadow (if any) survives. */
   const removeBorderStack = useCallback(() => {
@@ -3448,6 +3688,9 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       return;
     }
     if (borderBusyRef.current) return; // a rebuild is in flight
+    // Own the busy flag through the unwrap — its c.remove(group) fires a
+    // transient selection:cleared that must not close the mobile sheet.
+    borderBusyRef.current = true;
     isLockedRef.current = true;
     let u: { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null = null;
     let rewrap = false;
@@ -3460,8 +3703,11 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       }
     } finally {
       // The rewrap path re-locks itself (and owns its own unlock token);
-      // only the plain path releases the guard here.
-      if (!rewrap) isLockedRef.current = false;
+      // only the plain path releases the guards here.
+      if (!rewrap) {
+        isLockedRef.current = false;
+        borderBusyRef.current = false;
+      }
     }
     if (rewrap && u) {
       // borders removed but the shadow stays attached
@@ -3474,15 +3720,115 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
     scheduleSaveRef.current();
     toast('Borders removed', 'info');
   }, [getActive, unwrapAttachGroup, rewrapWithAttachments, updateLayersNow, saveHistory, toast]);
+  removeBorderStackRef.current = () => removeBorderStack();
+
+  /** Single-border styling on a SHAPE-CROPPED object must follow the crop
+   *  contour (a circle crop gets a circular border hugging the cut). fabric's
+   *  plain stroke would outline the transparent-cornered bitmap's RECTANGULAR
+   *  bounds instead. Route Width/Color/Gradient through a one-ring stack that
+   *  ringPathFor already traces along the crop shape. Returns false when the
+   *  object isn't shape-cropped → the caller falls back to the plain stroke.
+   *  Slider ticks are debounced (250ms) and MERGED — one ring rebuild per
+   *  pause, and width+gradient arriving in the same tick land as ONE apply. */
+  const applyContourStrokeNow = useCallback(
+    (patch: {
+      width?: number;
+      color?: string;
+      gradient?: { a: string; b: string; angle: number; type?: 'linear' | 'radial' } | null;
+    }) => {
+      const t = peekStrokeTarget();
+      if (!t) return false;
+      const core: any = t.core;
+      if (!core.onyxCropShape) return false;
+      const cur = t.ring?.rings?.[0];
+      let width = patch.width != null ? Math.max(0, patch.width) : cur?.width ?? core.strokeWidth ?? 0;
+      const color =
+        patch.color ?? cur?.color ?? (typeof core.stroke === 'string' && core.stroke ? core.stroke : '#ffffff');
+      const gradient = patch.gradient !== undefined ? patch.gradient : cur?.gradient;
+      if (width <= 0 && !(gradient && !cur)) {
+        // A gradient with no width still deserves a visible ring (the
+        // GradientStrokeSection toggle promises one) — seed 3px like it does
+        // and fall through. Everything else with width 0 = REMOVE the border
+        // (any existing advanced shadow survives). The picked color is
+        // remembered on the core so a later width bump reuses it.
+        if (t.ring) {
+          if (cur?.color && typeof cur.color === 'string') core.set({ stroke: cur.color });
+          if (borderBusyRef.current) {
+            // rebuild in flight — the queued cfg would resurrect a ring;
+            // queue a REMOVE that the flush honors instead
+            pendingRingRef.current = null;
+            pendingRingRemoveRef.current = core;
+            return true;
+          }
+          removeBorderStack();
+        } else {
+          core.set({ stroke: patch.color ?? core.stroke ?? '', strokeWidth: 0 });
+          canvasRef.current?.requestRenderAll();
+        }
+        return true;
+      }
+      if (width <= 0) width = 3; // gradient seed case
+      applyBorderStack(
+        {
+          count: 1,
+          mode: 'custom',
+          gap: 0,
+          colorA: color,
+          colorB: color,
+          widthMin: width,
+          widthMax: width,
+          rings: [{ width: Math.max(1, width), color, gradient: gradient ?? undefined }],
+        },
+        { quiet: true }
+      );
+      return true;
+    },
+    [peekStrokeTarget, applyBorderStack, removeBorderStack]
+  );
+
+  const applyContourStroke = useCallback(
+    (
+      patch: {
+        width?: number;
+        color?: string;
+        gradient?: { a: string; b: string; angle: number; type?: 'linear' | 'radial' } | null;
+      }
+    ) => {
+      // Synchronous answer for the plain-stroke fallback in updateStyle
+      const t = peekStrokeTarget();
+      if (!t || !(t.core as any).onyxCropShape) return false;
+      // merge + debounce the actual rebuild — per-tick ring rebuilds spammed
+      // history entries and janked phones
+      contourPatchAccRef.current = { ...contourPatchAccRef.current, ...patch };
+      if (contourDebounceRef.current) clearTimeout(contourDebounceRef.current);
+      contourDebounceRef.current = setTimeout(() => {
+        const merged = contourPatchAccRef.current;
+        contourPatchAccRef.current = null;
+        if (merged) applyContourStrokeNow(merged);
+      }, 250);
+      return true;
+    },
+    [peekStrokeTarget, applyContourStrokeNow]
+  );
+  contourStrokeRef.current = applyContourStroke;
 
   /** Apply / re-apply the advanced (gradient / 360°) shadow silhouette. */
   const applyShadowFx = useCallback(
     (cfg: ShadowFxConfig) => {
       const c = canvasRef.current;
       if (!c || borderBusyRef.current) return;
-      const t = resolveAttachmentTarget();
-      if (!t) return;
-      rewrapWithAttachments(t.core, { ring: t.ring, shadow: cfg }, 'shadow', { ring: t.ring, shadow: t.shadow });
+      // Own the busy flag through the unwrap (transient selection:cleared —
+      // same class of sheet-closing race as applyBorderStack).
+      borderBusyRef.current = true;
+      let handedOff = false;
+      try {
+        const t = resolveAttachmentTarget();
+        if (!t) return;
+        rewrapWithAttachments(t.core, { ring: t.ring, shadow: cfg }, 'shadow', { ring: t.ring, shadow: t.shadow });
+        handedOff = true;
+      } finally {
+        if (!handedOff) borderBusyRef.current = false;
+      }
     },
     [resolveAttachmentTarget, rewrapWithAttachments]
   );
@@ -3497,6 +3843,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       return;
     }
     if (borderBusyRef.current) return; // a rebuild is in flight
+    // Own the busy flag through the unwrap (transient selection:cleared guard)
+    borderBusyRef.current = true;
     isLockedRef.current = true;
     let u: { core: fabric.Object; ring?: BorderStackConfig; shadow?: ShadowFxConfig } | null = null;
     let rewrap = false;
@@ -3508,7 +3856,10 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
         if (u) c.setActiveObject(u.core);
       }
     } finally {
-      if (!rewrap) isLockedRef.current = false;
+      if (!rewrap) {
+        isLockedRef.current = false;
+        borderBusyRef.current = false;
+      }
     }
     if (rewrap && u) {
       rewrapWithAttachments(u.core, { ring: u.ring }, 'ring');
@@ -3589,6 +3940,24 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const obj = getActive();
       const c = canvasRef.current;
       if (!obj || !c) return;
+      // Shape-cropped object → a gradient ring hugging the crop contour
+      // (linear or radial — parseCssGradient reports which).
+      try {
+        const { colors, radial, angleDeg } = parseCssGradient(css);
+        if (colors.length >= 2) {
+          const handled = contourStrokeRef.current({
+            gradient: {
+              a: colors[0],
+              b: colors[colors.length - 1],
+              angle: angleDeg,
+              type: radial ? 'radial' : 'linear',
+            },
+          });
+          if (handled) return;
+        }
+      } catch {
+        /* parse hiccup → fall through to the plain fabric stroke */
+      }
       const w = (obj as any).width || 100;
       const h = (obj as any).height || 100;
       const grad = buildFrameGradient(css, w, h);
@@ -3606,6 +3975,8 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       const obj = getActive();
       const c = canvasRef.current;
       if (!obj || !c) return;
+      // Shape-cropped → solid contour ring instead of a rect stroke
+      if (contourStrokeRef.current({ color, gradient: null })) return;
       obj.set({ stroke: color } as any);
       c.requestRenderAll();
       scheduleSaveRef.current();
@@ -3968,6 +4339,12 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
   const apiStartCrop = useCallback(() => {
     const obj = getActive();
     if (!obj) return;
+    // A mask is being positioned — the temp shape IS the selection here; the
+    // cropper would rasterize the overlay itself and leak it on cancel.
+    if (maskShapeRef.current) {
+      toast('Finish or cancel the mask first', 'warning');
+      return;
+    }
     if ((obj as any).type === 'activeSelection') {
       toast('Select a single object to crop', 'warning');
       return;
@@ -4477,7 +4854,7 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       setObjectGradientFill,
       setObjectImageFill,
       setObjectSolidFill,
-      applyBorderStack: (cfg: BorderStackConfig) => void applyBorderStack(cfg),
+      applyBorderStack: (cfg: BorderStackConfig, opts?: { quiet?: boolean }) => void applyBorderStack(cfg, opts),
       removeBorderStack,
       applyShadowFx,
       removeShadowFx,
@@ -4562,7 +4939,15 @@ function CanvasEditorInner({ className = '' }: { className?: string }) {
       <div className={`relative flex h-[100dvh] w-full flex-col overflow-hidden bg-onyx-950 font-sans text-zinc-100 ${className}`}>
         {/* Crop takes over the whole viewport */}
         {cropData && (
-          <CropModal src={cropData} onCancel={() => setCropData(null)} onCrop={handleCrop} />
+          <CropModal
+            src={cropData}
+            onCancel={() => setCropData(null)}
+            onCrop={handleCrop}
+            onShapeCrop={(spec) => {
+              setCropData(null);
+              applyShapeCrop(spec);
+            }}
+          />
         )}
 
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} currentProjectId={projectIdRef.current || undefined} />
@@ -4768,7 +5153,12 @@ const MobileSheet: React.FC<{
       <div
         className={clsx(
           'max-h-[30dvh] overflow-y-auto overscroll-contain px-4 pb-5 transition-[max-height] duration-200 ease-out',
-          mode === 'tall' && 'max-h-[62dvh]'
+          // Tall is capped against the chrome budget too: the canvas wrapper
+          // pads by the FULL sheet height, so an uncapped 62dvh sheet pinned the
+          // canvas to its 160px floor and zoomFit shrank the artwork to a sliver
+          // (z≈0.04-0.07) right when the border editor needs live feedback.
+          // min(62dvh, 100dvh-470px) keeps ~200-290px of canvas; never below peek.
+          mode === 'tall' && 'max-h-[max(30dvh,min(62dvh,calc(100dvh-470px)))]'
         )}
       >
         {children}

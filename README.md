@@ -1,4 +1,4 @@
-# 🎨 Onyx Image Editor v2.4
+# 🎨 Onyx Image Editor v2.5
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-onyx.namansoni.in-blue?style=for-the-badge&logo=vercel)](https://onyx.namansoni.in)
 [![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
@@ -6,11 +6,19 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**Onyx v2.4** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
+**Onyx v2.5** is a fast, free, privacy-first, browser-based image editor with a real **pro desktop workspace** and a native-feeling **mobile experience** — built with Next.js, React 19 and Fabric.js. Every pixel is processed on your device; nothing is ever uploaded.
 
 🌐 **Live:** [https://onyx.namansoni.in](https://onyx.namansoni.in)
 
 ---
+
+## ✨ What's new in v2.5 — autosave without the flash, border UX rebuild
+
+- **Autosave never blanks the canvas**: heavy serialization now runs when the browser is idle (never mid-interaction), reuses the last committed document snapshot instead of re-stringifying a multi-megabyte canvas, and skips the selection discard/restore churn on every thumbnail capture — the 0.2–0.3s black flash after every change is gone.
+- **Border tab rebuilt**: Single border is the default mode (chips: Single / Multi-border), the multi-border Apply button is GONE — every tweak auto-applies (~350ms debounce, busy-safe queue so no tick is ever dropped), only the destructive Remove stays explicit.
+- **Mask vs Crop split**: Mask is now purely the reversible clip. The REAL shape cuts (circle, star, heart, hexagon, N-gon…) live in the Crop tool where they belong — a shape row inside the crop screen, one tap applies.
+- **Contour borders on shape crops**: crop a photo to a circle (or any shape) and the plain single border now hugs the cut contour perfectly — a circular border exactly on the cut, not a rectangle around the transparent corners. Works for width, color and gradient borders.
+- **Radial gradients everywhere borders are**: per-ring multi-border gradients, the single gradient border, and gradient shadows all gained a Radial (center → out) option next to Linear.
 
 ## ✨ What's new in v2.4 — the phone overhaul
 
